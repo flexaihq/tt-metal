@@ -44,7 +44,9 @@ def load_hf_state_dict(ckpt_dir):
 def standardize_hf_keys(state_dict):
     if not "lm_head.weight" in state_dict:
         # Assume tied to the embeddings if not present
-        state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
+        state_dict["lm_head.weight"] = state_dict.get(
+            "model.embed_tokens.weight", state_dict["language_model.model.embed_tokens.weight"]
+        )
     return state_dict
 
 
@@ -59,7 +61,9 @@ def map_hf_to_meta_keys(loaded_weights):
     hf_to_meta = {
         # Top level mappings
         "model.embed_tokens.weight": "tok_embeddings.weight",
+        "language_model.model.embed_tokens.weight": "tok_embeddings.weight",
         "model.norm.weight": "norm.weight",
+        "language_model.model.norm.weight": "norm.weight",
         "lm_head.weight": "output.weight",
         # Layer level mappings
         "input_layernorm.weight": "attention_norm.weight",
@@ -107,6 +111,20 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
         "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+        "language_model.model.layers.{layer}.input_layernorm.weight": "layers.{layer}.attention_norm.weight",
+        "language_model.model.layers.{layer}.post_attention_layernorm.weight": "layers.{layer}.ffn_norm.weight",
+        "language_model.model.layers.{layer}.self_attn.q_proj.weight": "layers.{layer}.attention.wq.weight",
+        "language_model.model.layers.{layer}.self_attn.k_proj.weight": "layers.{layer}.attention.wk.weight",
+        "language_model.model.layers.{layer}.self_attn.v_proj.weight": "layers.{layer}.attention.wv.weight",
+        "language_model.model.layers.{layer}.self_attn.o_proj.weight": "layers.{layer}.attention.wo.weight",
+        "language_model.model.layers.{layer}.self_attn.q_proj.bias": "layers.{layer}.attention.wq.bias",
+        "language_model.model.layers.{layer}.self_attn.k_proj.bias": "layers.{layer}.attention.wk.bias",
+        "language_model.model.layers.{layer}.self_attn.v_proj.bias": "layers.{layer}.attention.wv.bias",
+        "language_model.model.layers.{layer}.self_attn.q_norm.weight": "layers.{layer}.attention.q_norm.weight",
+        "language_model.model.layers.{layer}.self_attn.k_norm.weight": "layers.{layer}.attention.k_norm.weight",
+        "language_model.model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
+        "language_model.model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
+        "language_model.model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
     }
 
     meta_state_dict = {}
