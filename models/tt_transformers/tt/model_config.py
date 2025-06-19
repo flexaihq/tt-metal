@@ -575,6 +575,7 @@ class ModelArgs:
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "gemma-3-4b-it": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -1379,15 +1380,18 @@ class ModelArgs:
 
     def _set_params_from_dict(self, params, is_hf=False):
         # Common params with different names between Meta and HF
-        self.dim = params.get("dim", params.get("hidden_size"))
-        self.n_heads = params.get("n_heads", params.get("num_attention_heads"))
-        self.n_kv_heads = params.get("n_kv_heads", params.get("num_key_value_heads"))
-        self.n_layers = params.get("n_layers", params.get("num_hidden_layers"))
+        text_params = params
+        if "text_config" in params:
+            text_params = params["text_config"]
+        self.dim = text_params.get("dim", text_params.get("hidden_size"))
+        self.n_heads = text_params.get("n_heads", text_params.get("num_attention_heads"))
+        self.n_kv_heads = text_params.get("n_kv_heads", text_params.get("num_key_value_heads"))
+        self.n_layers = text_params.get("n_layers", text_params.get("num_hidden_layers"))
+        self.vocab_size = text_params["vocab_size"]
         self.full_model_n_layers = self.n_layers
         self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
-        self.vocab_size = params["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
-        self.head_dim = params.get("head_dim", self.dim // self.n_heads)
+        self.head_dim = text_params.get("head_dim", self.dim // self.n_heads)
         if is_hf:
             self.max_context_len = params.get("max_position_embeddings")
         else:
@@ -1396,8 +1400,8 @@ class ModelArgs:
             )  # For Llama3 Meta weights TODO: Remove this when we move to HF weights only
 
         # Handle different MLP dimension specifications
-        if "intermediate_size" in params:
-            self.hidden_dim = params["intermediate_size"]
+        if "intermediate_size" in text_params:
+            self.hidden_dim = text_params["intermediate_size"]
             self.ffn_dim_multiplier = None
             self.multiple_of = None
         else:
@@ -1448,14 +1452,16 @@ class ModelArgs:
                     self.hidden_dim = padded_hidden_dim
 
         # RoPE params
-        self.rope_theta = params.get("rope_theta")
+        self.rope_theta = text_params.get("rope_theta")
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
-        rope_scaling_params = params.get("rope_scaling", None)
+        rope_scaling_params = text_params.get("rope_scaling", None)
         if rope_scaling_params:
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
-            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", None)
+            self.orig_context_len = rope_scaling_params.get(
+                "original_max_position_embeddings", text_params.get("max_position_embeddings")
+            )
         else:
             self.rope_scaling_factor = None
             self.orig_context_len = None
@@ -1546,7 +1552,7 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name]).to_dict()
             else:
                 config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
-
+                logger.info(f"Loaded config using AutoConfig: {config}")
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
