@@ -575,7 +575,9 @@ class ModelArgs:
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "gemma-3-1b-it": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-4b-it": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-27b-it": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -860,6 +862,9 @@ class ModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
+            assert (
+                self.n_kv_heads % self.cluster_shape[1] == 0
+            ), f"n_kv_heads ({self.n_kv_heads}) must be divisible by num_devices ({self.cluster_shape[1]})"
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.MAX_QKV_MM_SEQ_LEN = 2048
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -878,7 +883,6 @@ class ModelArgs:
                 fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
             )
 
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
                 (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
                 ttnn.CoreGrid(y=8, x=8),
