@@ -577,6 +577,7 @@ class ModelArgs:
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "gemma-3-1b-it": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-4b-it": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-12b-it": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b-it": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
@@ -1382,11 +1383,17 @@ class ModelArgs:
         )
         return xs_1BSH
 
+    def _get_text_prefix(self):
+        if "gemma-3" in self.model_name.lower():
+            return "language_model."
+        elif self.is_vision():
+            return "text_model."
+        else:
+            return ""
+
     def _set_params_from_dict(self, params, is_hf=False):
         # Common params with different names between Meta and HF
-        text_params = params
-        if "text_config" in params:
-            text_params = params["text_config"]
+        text_params = params.get("text_config", params)
         self.dim = text_params.get("dim", text_params.get("hidden_size"))
         self.n_heads = text_params.get("n_heads", text_params.get("num_attention_heads"))
         self.n_kv_heads = text_params.get("n_kv_heads", text_params.get("num_key_value_heads"))
@@ -1397,7 +1404,7 @@ class ModelArgs:
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_params.get("head_dim", self.dim // self.n_heads)
         if is_hf:
-            self.max_context_len = params.get("max_position_embeddings")
+            self.max_context_len = text_params.get("max_position_embeddings")
         else:
             self.max_context_len = (
                 128 * 1024
@@ -1409,8 +1416,8 @@ class ModelArgs:
             self.ffn_dim_multiplier = None
             self.multiple_of = None
         else:
-            self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
-            self.multiple_of = params["multiple_of"]
+            self.ffn_dim_multiplier = text_params["ffn_dim_multiplier"]
+            self.multiple_of = text_params["multiple_of"]
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
         if "_name_or_path" in params:
@@ -1463,9 +1470,7 @@ class ModelArgs:
         rope_scaling_params = text_params.get("rope_scaling", None)
         if rope_scaling_params:
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
-            self.orig_context_len = rope_scaling_params.get(
-                "original_max_position_embeddings", text_params.get("max_position_embeddings")
-            )
+            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", self.max_context_len)
         else:
             self.rope_scaling_factor = None
             self.orig_context_len = None
@@ -1587,7 +1592,7 @@ class ModelArgs:
         return self.vision_chunk_size > 0
 
     def get_state_dict_prefix(self, module_name, layer_num):
-        text_prefix = "text_model." if self.is_vision() else ""
+        text_prefix = self._get_text_prefix()
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
         module_map = {
             "MLP": "feed_forward",

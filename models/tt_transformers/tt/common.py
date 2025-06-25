@@ -539,6 +539,7 @@ def create_tt_model(
     if not state_dict:
         state_dict = tt_model_args.load_state_dict()
 
+    logger.info(f"Constructing model with args {tt_model_args}")
     model = Transformer(
         args=tt_model_args,
         mesh_device=mesh_device,
