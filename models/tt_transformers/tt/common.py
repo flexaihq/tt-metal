@@ -164,24 +164,8 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
 
 def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
     # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
-    # Values obtained from grid search
-    low_freq_factor = 1
-    high_freq_factor = 4
 
-    low_freq_wavelen = orig_context_len / low_freq_factor
-    high_freq_wavelen = orig_context_len / high_freq_factor
-    new_freqs = []
-    for freq in freqs:
-        wavelen = 2 * math.pi / freq
-        if wavelen < high_freq_wavelen:
-            new_freqs.append(freq)
-        elif wavelen > low_freq_wavelen:
-            new_freqs.append(freq / scale_factor)
-        else:
-            assert low_freq_wavelen != high_freq_wavelen
-            smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
-            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
-    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+    return freqs  # TODO McW- Generalize the ApplyScaling to handle all models
 
 
 def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
@@ -522,7 +506,8 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    from models.tt_transformers.tt.model import Transformer
+    # from models.tt_transformers.tt.model import Transformer
+    from models.experimental.gemma3_1b.tt.model import Gemma3_4BTransformer as Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(

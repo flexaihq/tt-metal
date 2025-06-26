@@ -522,8 +522,8 @@ class ModelArgs:
         self.tokenizer_path = self.TOKENIZER_PATH + "/tokenizer.model"
 
         self.instruct = instruct
-        # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.CKPT_DIR.lower():
+        # If the weights file contain the keyword `instruct` or 'it' also set self.instruct to true
+        if any(word in self.CKPT_DIR.lower() for word in ["instruct", "it"]):
             self.instruct = True
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
@@ -573,6 +573,8 @@ class ModelArgs:
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-1b-it": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-4b-it": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
@@ -818,7 +820,7 @@ class ModelArgs:
                 k=k_dim,
                 n=n_dim,
                 grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
-                in0_block_w=1 if self.is_galaxy else None,
+                in0_block_w=32 if "gemma-3" in self.model_name else 1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
                 per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
             )
@@ -1388,6 +1390,8 @@ class ModelArgs:
         self.vocab_size = params["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
+
+        self.sliding_window_pattern = params.get("sliding_window_pattern", 1)
         if is_hf:
             self.max_context_len = params.get("max_position_embeddings")
         else:
@@ -1970,7 +1974,9 @@ class ModelArgs:
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
+                tokenizer.stop_tokens = [
+                    tokenizer.eos_token_id
+                ]  # TODO McW - Gemma 3 continues generating tokens even after the EOS token (1).
             return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
@@ -2020,12 +2026,17 @@ class ModelArgs:
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
-                if self.cached_hf_model is None:
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                    self.cached_hf_model = model
+                if "gemma-3" in self.model_name:
+                    from transformers import Gemma3ForCausalLM
+
+                    model = Gemma3ForCausalLM.from_pretrained(self.CKPT_DIR)
                 else:
-                    model = self.cached_hf_model
-                model.model.layers = model.model.layers[: self.n_layers]
+                    if self.cached_hf_model is None:
+                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                        self.cached_hf_model = model
+                    else:
+                        model = self.cached_hf_model
+                    model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
                 return wrapper
@@ -2039,7 +2050,7 @@ class ModelArgs:
             return RMSNorm(self.dim, self.norm_eps)
         else:
             model = self.reference_transformer(wrap=False)
-            layer = model.model.norm
+            layer = model.model.layers[0].self_attn.q_norm
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
@@ -2096,7 +2107,9 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ == "Qwen3Attention"
+            use_position_embeddings = (
+                layer.__class__.__name__ == "Qwen3Attention" or layer.__class__.__name__ == "Gemma3Attention"
+            )
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2272,7 +2285,8 @@ class HfDecoderWrapper:
                 mask = mask.unsqueeze(0)
         result = self.decoder.forward(
             x,
-            position_embeddings=position_embeddings,
+            position_embeddings_global=position_embeddings,
+            position_embeddings_local=position_embeddings,
             past_key_value=self.past_key_values,
             use_cache=True,
             position_ids=position_ids,
