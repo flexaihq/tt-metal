@@ -1640,7 +1640,7 @@ class ModelArgs:
             if self.from_hf_url:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
-                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, use_safetensors=True)
                 self.cached_hf_model = model
                 state_dict = model.state_dict()
             else:

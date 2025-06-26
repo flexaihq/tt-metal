@@ -39,7 +39,8 @@ def load_hf_state_dict(ckpt_dir):
         for file in safetensor_files:
             safetensor_path = os.path.join(ckpt_dir, file)
             weights = safetensors_load_file(safetensor_path)
-            loaded_weights.update(weights)  # Merge weights into a single dictionary
+            # Merge weights into a single dictionary
+            loaded_weights.update(weights)
     else:
         # Single-file case: Load the single model.safetensors file
         safetensor_path = os.path.join(ckpt_dir, "model.safetensors")
@@ -57,11 +58,12 @@ def standardize_hf_keys(state_dict):
     if not any(f"{prefix}{key_meta}" in state_dict for prefix in _prefixes()):
         # Assume tied to the embeddings if not present
         for prefix in _prefixes():
-            if f"model.{prefix}{key_hf}" in state_dict:
-                state_dict[f"{prefix}{key_meta}"] = state_dict[f"model.{prefix}{key_hf}"]
+            if f"{prefix}model.{key_hf}" in state_dict:
+                state_dict[f"{prefix}{key_meta}"] = state_dict[f"{prefix}model.{key_hf}"]
             if f"{prefix}{key_hf}" in state_dict:
                 state_dict[f"{prefix}{key_meta}"] = state_dict[f"{prefix}{key_hf}"]
-        return state_dict
+
+    return state_dict
 
 
 def convert_hf_to_meta(state_dict, head_dim):
@@ -75,9 +77,9 @@ def map_hf_to_meta_keys(loaded_weights):
     hf_to_meta = {
         # Top level mappings
         "model.embed_tokens.weight": "tok_embeddings.weight",
-        "model.{prefix}embed_tokens.weight": "tok_embeddings.weight",
+        "{prefix}model.embed_tokens.weight": "tok_embeddings.weight",
         "model.norm.weight": "norm.weight",
-        "model.{prefix}norm.weight": "norm.weight",
+        "{prefix}model.norm.weight": "norm.weight",
         "lm_head.weight": "output.weight",
         "{prefix}lm_head.weight": "output.weight",
         # Layer level mappings
@@ -112,54 +114,51 @@ def map_hf_to_meta_keys(loaded_weights):
         "k_norm.weight": "k_norm.weight",
         "weight": "emb.weight",  # For host embeddings
         # Full path layer mappings
-        "model.{prefix}layers.{layer}.input_layernorm.weight": "layers.{layer}.attention_norm.weight",
-        "model.{prefix}layers.{layer}.post_attention_layernorm.weight": "layers.{layer}.ffn_norm.weight",
-        "model.{prefix}layers.{layer}.self_attn.q_proj.weight": "layers.{layer}.attention.wq.weight",
-        "model.{prefix}layers.{layer}.self_attn.k_proj.weight": "layers.{layer}.attention.wk.weight",
-        "model.{prefix}layers.{layer}.self_attn.v_proj.weight": "layers.{layer}.attention.wv.weight",
-        "model.{prefix}layers.{layer}.self_attn.o_proj.weight": "layers.{layer}.attention.wo.weight",
-        "model.{prefix}layers.{layer}.self_attn.q_proj.bias": "layers.{layer}.attention.wq.bias",
-        "model.{prefix}layers.{layer}.self_attn.k_proj.bias": "layers.{layer}.attention.wk.bias",
-        "model.{prefix}layers.{layer}.self_attn.v_proj.bias": "layers.{layer}.attention.wv.bias",
-        "model.{prefix}layers.{layer}.self_attn.q_norm.weight": "layers.{layer}.attention.q_norm.weight",
-        "model.{prefix}layers.{layer}.self_attn.k_norm.weight": "layers.{layer}.attention.k_norm.weight",
-        "model.{prefix}layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
-        "model.{prefix}layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
-        "model.{prefix}layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
-        # "model.language_model.layers.0.post_feedforward_layernorm.weight": "model-00001-of-00002.safetensors",
-        # "model.language_model.layers.0.pre_feedforward_layernorm.weight": "model-00001-of-00002.safetensors",
+        "{prefix}model.layers.{layer}.input_layernorm.weight": "layers.{layer}.attention_norm.weight",
+        "{prefix}model.layers.{layer}.post_attention_layernorm.weight": "layers.{layer}.ffn_norm.weight",
+        "{prefix}model.layers.{layer}.self_attn.q_proj.weight": "layers.{layer}.attention.wq.weight",
+        "{prefix}model.layers.{layer}.self_attn.k_proj.weight": "layers.{layer}.attention.wk.weight",
+        "{prefix}model.layers.{layer}.self_attn.v_proj.weight": "layers.{layer}.attention.wv.weight",
+        "{prefix}model.layers.{layer}.self_attn.o_proj.weight": "layers.{layer}.attention.wo.weight",
+        "{prefix}model.layers.{layer}.self_attn.q_proj.bias": "layers.{layer}.attention.wq.bias",
+        "{prefix}model.layers.{layer}.self_attn.k_proj.bias": "layers.{layer}.attention.wk.bias",
+        "{prefix}model.layers.{layer}.self_attn.v_proj.bias": "layers.{layer}.attention.wv.bias",
+        "{prefix}model.layers.{layer}.self_attn.q_norm.weight": "layers.{layer}.attention.q_norm.weight",
+        "{prefix}model.layers.{layer}.self_attn.k_norm.weight": "layers.{layer}.attention.k_norm.weight",
+        "{prefix}model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
+        "{prefix}model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
+        "{prefix}model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+        "{prefix}model.layers.{layer}.pre_feedforward_layernorm.weight": "layers.{layer}.pre_ffn_norm.weight",
+        "{prefix}model.layers.{layer}.post_feedforward_layernorm.weight": "layers.{layer}.post_ffn_norm.weight",
     }
 
     meta_state_dict = {}
-    # logger.info(f"all keys: {loaded_weights.keys()}")
+    dropped = 0
     for key, tensor in loaded_weights.items():
         prefix = next((p for p in _prefixes() if key.startswith("model." + p) or key.startswith(p)), "")
-
-        logger.info(f"loading [{key}], [{prefix}]")
-        if prefix:
+        if len(prefix) > 0:
             key = key.replace(prefix, "{prefix}")
-        logger.info(f" -> became [{key}]")
 
         if key in hf_to_meta:
             # Direct match for top-level keys
             transformed_key = prefix + hf_to_meta[key]
-            logger.info(f" -> storing key [{transformed_key}]")
             meta_state_dict[transformed_key] = tensor
-        elif key.startswith("model.{prefix}layers."):
+        elif key.startswith("{prefix}model.layers."):
             # Extract layer number and form a template key
             parts = key.split(".")
-            layer_num = parts[2]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
-            template_key = "model.{prefix}layers.{layer}." + ".".join(parts[3:])
+            # e.g. "0" in "model.layers.0.input_layernorm.weight"
+            layer_num = parts[2]
+            template_key = "{prefix}model.layers.{layer}." + ".".join(parts[3:])
             if template_key in hf_to_meta:
                 transformed_key = prefix + hf_to_meta[template_key].format(prefix=prefix, layer=layer_num)
-                logger.info(f" -> storing key [{transformed_key}]")
                 meta_state_dict[transformed_key] = tensor
             else:
-                logger.info(f" -> (1) dropping weight stored as {key}, {prefix}")
+                dropped += 1
         else:
-            logger.info(f" -> (2) dropping weight stored as {key}")
+            dropped += 1
 
-    logger.info(f"Transformed keys: {meta_state_dict.keys()}")
+    # TODO (jschuhmacher): that can't be good ...
+    logger.warning(f"Dropped {dropped} values from state dict")
     return meta_state_dict
 
 
@@ -228,7 +227,8 @@ def load_sharded_checkpoints(checkpoints, n_layers):
             checkpoint[key] = value[0]
         else:
             if key.endswith("tok_embeddings.weight") or key.endswith("output.weight"):
-                assert value[0].shape[1] == 8192  # FIXME: do we need this hardcoded shape?
+                # FIXME: do we need this hardcoded shape?
+                assert value[0].shape[1] == 8192
                 # Concatenate along dimension 0 for llama3 token embeddings weight and lm head
                 checkpoint[key] = torch.cat(value, dim=0)
             else:
