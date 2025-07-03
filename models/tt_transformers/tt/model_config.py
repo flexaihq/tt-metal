@@ -1465,10 +1465,11 @@ class ModelArgs:
         return xs_1BSH
 
     def _get_text_prefix(self):
-        if self.is_llama_vision():
+        if self.is_multimodal:
             return "text_model."
         else:
             return ""
+
 
     def _get_vision_prefix(self):
         return "visual."
@@ -1625,7 +1626,6 @@ class ModelArgs:
         self.state_dict_text_prefix = self._get_text_prefix()
         self.state_dict_vision_prefix = self._get_vision_prefix()
 
-        self._set_model_specific_params()
 
     @property
     def use_scaled_rope(self):
@@ -1700,7 +1700,7 @@ class ModelArgs:
             else None
         )
 
-    def _set_vision_params(self, config):
+    def _set_vision_params(self, vision_config):
         vision_config = config.get("vision_config", config)
 
         self.vision_chunk_size = vision_config.get("vision_chunk_size", vision_config.get("image_size", -1))
@@ -1712,17 +1712,22 @@ class ModelArgs:
         self.vision_dim = vision_config.get("hidden_size", 1280)
 
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
+        self.vision_image_size = vision_config.get("image_size", 1540)
+        self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
+
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
         self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
-        self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
-        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+        self.vision_attn_n_heads = vision_config.get("num_attention_heads") or vision_config.get("num_heads") or 16
 
-        self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
+        self.vision_n_layers = vision_config.get("num_hidden_layers") or vision_config.get("depth") or 27
         self.vision_patch_size = vision_config.get("patch_size", 14)
         self.vision_in_channels = vision_config.get("num_channels", 3)
 
         self.vision_dropout = vision_config.get("attention_dropout", 0.0)
         self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", config.get("mm_tokens_per_image", 256))
+
+        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            self.vision_head_dim = vision_config.get("head_dim", 64)
 
         # Optional vision activation layer, defaults to GELU
         act_layer = vision_config.get("act_layer", "gelu").lower()
@@ -1736,11 +1741,14 @@ class ModelArgs:
         self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
         self.vision_n_global_layers = vision_config.get("n_global_layers", vision_config.get("num_global_layers", 8))
 
-    def _set_hf_params(self, checkpoint_dir):
-        if self.from_hf_url:
-            from transformers import AutoConfig
 
-            if self.dummy_weights:
+    def _set_hf_params(self, checkpoint_dir):
+        def merge_text_config(base_config):
+            text_config = base_config.get("text_config", {})
+            # Merge non-nested keys into text_config
+            text_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return text_config
+        def merge_vision_config(base_config):
                 logger.info(
                     f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
                 )
@@ -1755,12 +1763,25 @@ class ModelArgs:
                 )
 
             config = self.hf_config.to_dict()
+            if "text_config" in config or "vision_config" in config:
+                merged_text_config = merge_text_config(config)
+                self._set_params_from_dict(merged_text_config, is_hf=True)
+
+                if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+                    self._set_vision_params(config["vision_config"])
+                else:
+                    if "vision_config" in config:
+                        merged_vision_config = merge_vision_config(config)
+                        self._set_vision_params(merged_vision_config)
+            else:
+                self._set_params_from_dict(config, is_hf=True)
+
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
-        self._set_params_from_dict(config, is_hf=True)
+            self._set_params_from_dict(config)
 
         # compatibility with _set_params
         if "llama" in self.model_name.lower():
@@ -1927,24 +1948,8 @@ class ModelArgs:
             if self.is_multimodal:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
                 if self.is_llama_vision():
-                    state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
                 else:
                     state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
-            else:
-                self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
-                self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
-                state_dict = standardize_hf_keys(state_dict)
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
-
-        keys_dict = list(state_dict.keys())[:]
-        remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
-        for k in keys_dict:
-            if any([r in k for r in remv]):
-                state_dict.pop(k)
-        if getattr(self, "is_mixture_of_experts", False):
-            self.initialize_mixture_of_experts_configs()
-            self.moe = True
-            self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
         return state_dict
 
     def initialize_mixture_of_experts_configs(self):
@@ -2379,57 +2384,82 @@ class ModelArgs:
                 logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
+            # Special handling for Mistral-Small-3.1-24B-Instruct-2503
+            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    "mistralai/Mistral-Small-3.1-24B-Instruct-2503", trust_remote_code=True
+                )
+                logger.info("Manually setting Mistral instruct-style chat template on the tokenizer.")
 
-                # Try to use base model tokenizer as fallback
-                fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
+                mistral_template = """{% for message in messages %}
+                                    {% if message['role'] == 'system' %}
+                                    <|system|>
+                                    {{ message['content'] }}
+                                    {% elif message['role'] == 'user' %}
+                                    [INST] {{ message['content'] }} [/INST]
+                                    {% elif message['role'] == 'assistant' %}
+                                    {{ message['content'] }}{{ eos_token }}
+                                    {% endif %}
+                                    {% endfor %}"""
+                tokenizer.chat_template = mistral_template
+            else:
+                try:
+                    # Try to load tokenizer from the original model path
+                    tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+                    logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
+                except Exception as e:
+                    logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
 
-                # If no direct match, try to infer from model name patterns
-                if not fallback_tokenizer_path:
-                    model_name_lower = self.model_name.lower()
-                    if "qwen2.5" in model_name_lower and "0.5b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "1.5b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-1.5B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "3b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-3B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "7b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-7B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "14b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-14B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "32b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
-                    elif "qwen2.5" in model_name_lower and "72b" in model_name_lower:
-                        fallback_tokenizer_path = "Qwen/Qwen2.5-72B-Instruct"
-                    elif "llama" in model_name_lower and "3.1" in model_name_lower and "8b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.1-8B-Instruct"
-                    elif "llama" in model_name_lower and "3.1" in model_name_lower and "70b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.1-70B-Instruct"
-                    elif "llama" in model_name_lower and "3.2" in model_name_lower and "1b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.2-1B-Instruct"
-                    elif "llama" in model_name_lower and "3.2" in model_name_lower and "3b" in model_name_lower:
-                        fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
-                    elif "mistral" in model_name_lower and "7b" in model_name_lower:
-                        fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
-                    elif (
-                        "phi-3-mini" in model_name_lower
-                        and "128k" in model_name_lower
-                        and "instruct" in model_name_lower
-                    ):
-                        fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
+                    # Try to use base model tokenizer as fallback
+                    fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
 
-                if fallback_tokenizer_path:
-                    logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
-                    try:
-                        tokenizer = AutoTokenizer.from_pretrained(
-                            fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
-                        )
-                        logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
-                    except Exception as fallback_e:
-                        logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
-                        raise fallback_e
-                else:
-                    logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
-                    raise e
+                    # If no direct match, try to infer from model name patterns
+                    if not fallback_tokenizer_path:
+                        model_name_lower = self.model_name.lower()
+                        if "qwen2.5" in model_name_lower and "0.5b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "1.5b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-1.5B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "3b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-3B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "7b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-7B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "14b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-14B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "32b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
+                        elif "qwen2.5" in model_name_lower and "72b" in model_name_lower:
+                            fallback_tokenizer_path = "Qwen/Qwen2.5-72B-Instruct"
+                        elif "llama" in model_name_lower and "3.1" in model_name_lower and "8b" in model_name_lower:
+                            fallback_tokenizer_path = "meta-llama/Llama-3.1-8B-Instruct"
+                        elif "llama" in model_name_lower and "3.1" in model_name_lower and "70b" in model_name_lower:
+                            fallback_tokenizer_path = "meta-llama/Llama-3.1-70B-Instruct"
+                        elif "llama" in model_name_lower and "3.2" in model_name_lower and "1b" in model_name_lower:
+                            fallback_tokenizer_path = "meta-llama/Llama-3.2-1B-Instruct"
+                        elif "llama" in model_name_lower and "3.2" in model_name_lower and "3b" in model_name_lower:
+                            fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
+                        elif "mistral" in model_name_lower and "7b" in model_name_lower:
+                            fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
+                        elif (
+                            "phi-3-mini" in model_name_lower
+                            and "128k" in model_name_lower
+                            and "instruct" in model_name_lower
+                        ):
+                            fallback_tokenizer_path = "microsoft/Phi-3-mini-128k-instruct"
+
+                    if fallback_tokenizer_path:
+                        logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
+                        try:
+                            tokenizer = AutoTokenizer.from_pretrained(
+                                fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                            )
+                            logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
+                        except Exception as fallback_e:
+                            logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
+                            raise fallback_e
+                    else:
+                        logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
+                        raise e
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
@@ -2494,6 +2524,7 @@ class ModelArgs:
 
             model_cls = self.get_hf_model_cls()
 
+
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
@@ -2540,6 +2571,38 @@ class ModelArgs:
             else:
                 return model
 
+    def reference_vision_multi_modal(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.multi_modal_projector
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rms_norm(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.multi_modal_projector.mm_soft_emb_norm
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rms_norm_qwen(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.visual.blocks[0].norm1
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rms_norm_qwen_merger(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.visual.merger
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+        return layer
+
     def reference_rms_norm(self):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm
@@ -2547,7 +2610,8 @@ class ModelArgs:
             return RMSNorm(self.dim, self.norm_eps)
         else:
             model = self.reference_transformer(wrap=False)
-            layer = model.model.norm
+            layers = getattr(model, "layers", getattr(model, "model", {}).layers)
+            layer = layers[0].input_layernorm
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
@@ -2557,16 +2621,16 @@ class ModelArgs:
             from transformers import AutoConfig
 
             model_cls = self.get_hf_model_cls()
-
             if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
-                model = model_cls.from_config(config)
-            else:
-                if self.cached_hf_model is None:
-                    model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
-                    self.cached_hf_model = model
+                    model = model
+                elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+                    from transformers import Mistral3ForConditionalGeneration
+
+                    model = Mistral3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, torch_dtype=torch.bfloat16)
+                    model = model
+
                 else:
                     model = self.cached_hf_model
                 model.model.layers = model.model.layers[: self.n_layers]
@@ -2576,6 +2640,156 @@ class ModelArgs:
                 return wrapper
             else:
                 return model
+
+    def reference_gemma_model(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_model(self):
+        model = self.reference_vision_transformer(wrap=False)
+        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            # Mistral-Small-3.1-24B-Instruct-2503 has a different structure
+            layer = model.vision_tower
+        else:
+            layer = model.vision_tower.vision_model
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_model(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_mlp(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.encoder.layers[0].mlp
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_pixtral_image_block(self, layer_num=0):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.transformer.layers[layer_num]
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_mlp(self, layer_idx=0):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.transformer.layers[layer_idx].feed_forward
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rms(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.transformer.layers[0].ffn_norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.patch_conv
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_siglip_patch_embed(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.embeddings.patch_embedding
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_pos_embedding(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.embeddings.position_embedding
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_embedding(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.embeddings
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_layernorm(self, layer_name="layer_norm1"):
+        if layer_name == "layer_norm1":
+            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm1
+        elif layer_name == "layer_norm2":
+            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm2
+        else:
+            layer = model.vision_tower.vision_model.post_layernorm
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_attention(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_layernorm(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm1
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_attention(self, layer_idx=0):
+        model = self.reference_vision_transformer(wrap=False)
+        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            layer = model.vision_tower.transformer.layers[layer_idx].attention
+        else:
+            layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rot_emb(self):
+        model = self.reference_vision_transformer(wrap=False)
+        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            layer = model.vision_tower.patch_positional_embedding
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_encoder_block(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.encoder.layers[0]
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_encoder(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.vision_model.encoder
+        # layer._load_state_dict = layer.load_state_dict
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            layer = model.vision_tower.transformer
+        else:
+            layer = model.vision_tower.vision_model.encoder
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
 
     def reference_mlp(self):
         if self.checkpoint_type == CheckpointType.Meta:
@@ -2638,7 +2852,7 @@ class ModelArgs:
             layer = model.model.layers[0].self_attn
             use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
             wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
+                layer, self.head_dim, model.model.rotary_emb wif use_position_embeddings else None
             )
             return wrapper
 
