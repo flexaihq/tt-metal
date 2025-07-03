@@ -1,17 +1,20 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import pytest
+import torch
 from loguru import logger
 
-import torch
-import pytest
-import os
 import ttnn
 
 from models.experimental.mistral_24b.tt.vision_rope import VisionRotarySetup as RotarySetup
 
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.mistral_24b.vision_rope import VisionRotarySetup as RotarySetup
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
