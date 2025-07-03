@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-
 """
 This is the end-to-end pipeline for the Mistral-Small-3.1-24B-Instruct-2503 model.
 

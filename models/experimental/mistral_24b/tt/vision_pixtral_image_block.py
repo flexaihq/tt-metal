@@ -13,7 +13,6 @@ from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as 
 This file implements the pixtral image block specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
 """
 
-
 class TtPixtralImageTransformerBlock(LightweightModule):
     def __init__(
         self,

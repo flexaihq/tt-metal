@@ -6,7 +6,6 @@
 This file implements the Vision Transformer submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
 This pipeline iterates over the pixtral image blocks to generate the image embeddings.
 """
-
 from tqdm import tqdm
 
 from models.common.lightweightmodule import LightweightModule
@@ -30,7 +29,6 @@ class TtPixtralTransformer(LightweightModule):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
-
         block_key = "layers"
         self.resblocks = [
             TtPixtralImageTransformerBlock(

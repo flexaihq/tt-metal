@@ -16,7 +16,6 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.pipeline.mistral_vision_tower import MistralVisionTower
 from models.common.utility_functions import comp_allclose, comp_pcc
 
-
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -24,11 +23,6 @@ from models.common.utility_functions import comp_allclose, comp_pcc
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
     indirect=True,
 )
 def test_mistral_vision_tower(mesh_device, reset_seeds):
@@ -45,7 +39,7 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
 
     B, C, H, W = 1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size
     input_tensor = torch.rand((B, C, H, W), dtype=torch.bfloat16)
-    print("state_dict ", state_dict.keys())
+
     ##### Reference model output (Torch) #####
     reference_model = model_args.reference_vision_model()
     reference_model.load_state_dict(partial_state_dict)

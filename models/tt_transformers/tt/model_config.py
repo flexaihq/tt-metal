@@ -1718,6 +1718,7 @@ class ModelArgs:
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
         self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
         self.vision_attn_n_heads = vision_config.get("num_attention_heads") or vision_config.get("num_heads") or 16
+        self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
 
         self.vision_n_layers = vision_config.get("num_hidden_layers") or vision_config.get("depth") or 27
         self.vision_patch_size = vision_config.get("patch_size", 14)
@@ -1727,6 +1728,9 @@ class ModelArgs:
         self.mm_tokens_per_image = vision_config.get(
             "mm_tokens_per_image", vision_config.get("mm_tokens_per_image", 256)
         )
+
+        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            self.vision_head_dim = vision_config.get("head_dim", 64)
 
         if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
             self.vision_head_dim = vision_config.get("head_dim", 64)
@@ -1774,17 +1778,6 @@ class ModelArgs:
                 )
 
             config = self.hf_config.to_dict()
-            # if "text_config" in config or "vision_config" in config:
-            #     merged_text_config = merge_text_config(config)
-            #     self._set_params_from_dict(merged_text_config, is_hf=True)
-
-            #     if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            #         self._set_vision_params(config["vision_config"])
-            #     else:
-            #         if "vision_config" in config:
-            #             merged_vision_config = merge_vision_config(config)
-            #             self._set_vision_params(merged_vision_config)
-            # else:
             self._set_params_from_dict(config, is_hf=True)
 
         else:
@@ -1832,7 +1825,6 @@ class ModelArgs:
                 if self.rope_scaling_factor is not None
                 else None
             )
-
     def __repr__(self):
         return f"""ModelArgs(
     dim={self.dim},
@@ -2685,6 +2677,7 @@ class ModelArgs:
             layer = model.vision_tower.vision_model
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+
         return layer
 
     def reference_vision_mlp(self, layer_idx=0):
@@ -2723,11 +2716,41 @@ class ModelArgs:
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
+    def reference_pixtral_image_block(self, layer_num=0):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.transformer.layers[layer_num]
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_mlp(self, layer_idx=0):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.transformer.layers[layer_idx].feed_forward
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_vision_rms(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.transformer.layers[0].ffn_norm
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_conv2d_patch(self):
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.patch_conv
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
     def reference_siglip_patch_embed(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.vision_model.embeddings.patch_embedding
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_pos_embedding(self):
@@ -2735,6 +2758,8 @@ class ModelArgs:
         layer = model.vision_tower.vision_model.embeddings.position_embedding
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_embedding(self):
@@ -2778,6 +2803,8 @@ class ModelArgs:
         layer = model.vision_tower.vision_model.encoder.layers[0]
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_encoder(self):
@@ -2851,7 +2878,7 @@ class ModelArgs:
             layer = model.model.layers[0].self_attn
             use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
             wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
+                layer, self.head_dim, model.model.rotary_emb wif use_position_embeddings else None
             )
             return wrapper
 

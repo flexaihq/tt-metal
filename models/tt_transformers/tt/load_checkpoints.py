@@ -701,6 +701,19 @@ def map_vision_meta_to_hf_keys(loaded_weights):
     ]
     mapping = base_mapping
 
+    extra_mapping = [
+        ("attention_norm", "input_layernorm"),
+        ("ffn_norm", "post_attention_layernorm"),
+        ("attention", "self_attn"),
+        ("feed_forward", "mlp"),
+    ]
+
+    model_name = os.getenv("HF_MODEL")
+    if "Mistral" in model_name:
+        mapping = base_mapping
+    else:
+        mapping = base_mapping + extra_mapping
+
     return replace_keys(loaded_weights, mapping)
 
 
