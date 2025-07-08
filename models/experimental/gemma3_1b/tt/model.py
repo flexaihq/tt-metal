@@ -3,17 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from tqdm import tqdm
+import torch
+
 from models.experimental.gemma3_1b.tt.rmsnorm import RMSNorm
 
-# from models.tt_transformers.tt.model import Transformer
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.embedding import Embedding
 from models.tt_transformers.tt.rope import RotarySetup
 
 from models.experimental.gemma3_1b.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from tqdm import tqdm
-import torch
 from models.experimental.gemma3_1b.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.common import copy_host_to_device
@@ -59,7 +59,9 @@ class Gemma3_4BTransformer(LightweightModule):
             args.orig_context_len,
         )
 
-        args.rope_scaling_factor = None  # TODO Handle gemma3_1b
+        # Gemma3-1B uses different rope configurations for sliding vs global attention
+        # Keep original rope_scaling_factor for global attention, None for local sliding window
+        args.rope_scaling_factor = None  # Set to None for local rope setup
 
         self.rope_setup_local = RotarySetup(
             mesh_device,
@@ -411,8 +413,8 @@ class Gemma3_4BTransformer(LightweightModule):
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
             )
 
-        # if mode == "prefill" and get_last_token == -1:
-        #     return x
+        if mode == "prefill" and get_last_token == -1:
+            return x
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:

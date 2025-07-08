@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Â© 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
@@ -78,7 +78,7 @@ class RMSNorm(LightweightModule):
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
-            # cache_file_name=cache_name,
+            cache_file_name=cache_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 
@@ -89,7 +89,7 @@ class RMSNorm(LightweightModule):
                 dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=weight_memory_config,
-                # cache_file_name=cache_name,
+                cache_file_name=cache_name,
                 mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
                 if is_mesh_device
                 else None,

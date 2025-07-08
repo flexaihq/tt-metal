@@ -179,7 +179,7 @@ class MLP(LightweightModule):
             w1_out,
             w3_out,
             input_tensor_a_activations=[ttnn.UnaryOpType.GELU],
-            dtype=activation_dtype or ttnn.bfloat8_b,
+            dtype=activation_dtype or ttnn.bfloat16,
             memory_config=w1_out.memory_config(),
         )
 

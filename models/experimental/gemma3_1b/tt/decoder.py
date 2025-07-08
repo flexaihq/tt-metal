@@ -6,8 +6,6 @@ from models.experimental.gemma3_1b.tt.rmsnorm import RMSNorm
 
 from models.experimental.gemma3_1b.tt.attention import Attention
 
-# from models.tt_transformers.tt.attention import Attention
-
 from models.experimental.gemma3_1b.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
 
@@ -164,10 +162,10 @@ class TransformerBlock(LightweightModule):
 
         attn_in = self.attention_norm(hidden_states, mode)
 
-        if self.attention.is_sliding:  # TODO Handle for gemma3_1b
-            position_embeddings = rot_mats[1]  # uses local
+        if self.attention.is_sliding:
+            position_embeddings = rot_mats[1]
         else:
-            position_embeddings = rot_mats[0]  # uses global
+            position_embeddings = rot_mats[0]
 
         attn_out = self.attention.forward(
             attn_in,
@@ -186,9 +184,7 @@ class TransformerBlock(LightweightModule):
         ttnn.deallocate(attn_out)
         ttnn.deallocate(attn_in)
 
-        hidden_states = ttnn.add(
-            hidden_states, residual, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
-        )
+        hidden_states = ttnn.add(hidden_states, residual, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
 
         residual = hidden_states
 

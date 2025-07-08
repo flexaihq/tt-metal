@@ -9,7 +9,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-# from models.common.rmsnorm import RMSNorm
 from models.experimental.gemma3_1b.tt.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
@@ -502,8 +501,8 @@ class Attention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
                 scale=self.scale,
-                # program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                # compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
+                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
@@ -580,7 +579,7 @@ class Attention(LightweightModule):
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.TG else attn_output_cat.memory_config(),
-                dtype=ttnn.bfloat8_b if self.TG else None,
+                dtype=ttnn.bfloat8_b if self.TG else ttnn.bfloat16,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
             )
 

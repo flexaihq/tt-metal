@@ -143,7 +143,7 @@ def prepare_generator_args(
             optimizations=optimizations,
             max_seq_len=max_seq_len,
             paged_attention_config=paged_attention_config,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             state_dict=state_dict,
         )
         model_args.append(model_args_i)
@@ -188,8 +188,12 @@ def prepare_generator_args(
             1,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {
+                "temperature": 0.8,
+                "top_p": 0.9,
+                "repetition_penalty": 1.5,
+            },  # sampling_params (balanced approach to avoid repetition)
             True,  # stop_at_eos
             False,  # ci_only
             1,
@@ -698,6 +702,10 @@ def test_demo_text(
                     logits,
                     temperature=sampling_params["temperature"],
                     top_p=sampling_params["top_p"],
+                    repetition_penalty=sampling_params.get("repetition_penalty", 1.0),
+                    generated_tokens=all_outputs[0]
+                    if len(all_outputs) > 0
+                    else [],  # Pass generated tokens for repetition penalty
                     on_host=True,
                 )
 
@@ -719,14 +727,18 @@ def test_demo_text(
             # Save output token to print out later
             for user in range(global_batch_size):
                 user_tok = out_tok[user].item()
-                if (
-                    user_tok not in tokenizer.stop_tokens and user_done[user] == False
-                ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
+
+                # Check if this is a special/stop token
+                is_stop_token = user_tok in tokenizer.stop_tokens
+                is_eos_token = user_tok == tokenizer.eos_token_id
+
+                # Only append the token if it's not a stop token (so <end_of_turn> doesn't appear in output)
+                if user_done[user] == False and not (is_stop_token or is_eos_token):
                     all_outputs[user].append(user_tok)
-                else:
-                    if (
-                        stop_at_eos
-                    ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
+
+                # Mark user as done if we encounter a stop token
+                if is_stop_token or is_eos_token:
+                    if stop_at_eos:  # Stop naturally on EOS tokens
                         user_done[user] = True
                         logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
                         if all(user_done):
@@ -752,9 +764,11 @@ def test_demo_text(
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-                    text = tokenizer.decode(output)
+                    # Decode the output tokens
+                    text = tokenizer.decode(output, skip_special_tokens=True)
+
                     prompt_including_assistant_tags = tokenizer.decode(
-                        model_args[0].encode_prompt(prompt, instruct=instruct)
+                        model_args[0].encode_prompt(prompt, instruct=instruct), skip_special_tokens=True
                     )
                     text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
                     if print_to_file:

@@ -105,7 +105,7 @@ class ModelOptimizations:
                     {
                         "TensorPrecision": {
                             TensorGroup.WQKV: PrecisionSetting.BFP8,
-                            TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                            TensorGroup.KV_CACHE: PrecisionSetting.BF16,  # Upgraded from BFP8 to prevent accumulation errors
                             TensorGroup.WO: PrecisionSetting.BFP8,
                         },
                         "OpFidelity": {
@@ -233,7 +233,7 @@ class ModelOptimizations:
                 # Attention
                 TensorGroup.WQKV: PrecisionSetting.BFP8,
                 TensorGroup.WO: PrecisionSetting.BFP8,
-                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BF16,  # Upgraded from BFP8 to prevent accumulation errors
                 # Activation across whole model
                 TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
             },
@@ -243,7 +243,7 @@ class ModelOptimizations:
                 OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
                 # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
                 OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,  # Upgraded from HIFI2 for better precision
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
@@ -711,6 +711,14 @@ class ModelArgs:
                 exp_approx_mode=False,
                 q_chunk_size=256 if seqlen >= 2048 else 64,
                 k_chunk_size=256 if seqlen >= 2048 else 64,
+            )
+
+            # SDPA Decode config for both regular and paged attention decode
+            self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
+                q_chunk_size=32,
+                k_chunk_size=64,  # Increased from 32 to reduce reduction operations and accumulation errors
             )
 
             # nlp_concat_heads_decode will shard the data across this number of cores
@@ -1281,7 +1289,7 @@ class ModelArgs:
             self.num_all_gather_links = (
                 2 if self.is_galaxy else 1
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
-            self.ccl_dtype = ttnn.bfloat8_b
+            self.ccl_dtype = ttnn.bfloat16
 
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")
@@ -1391,6 +1399,7 @@ class ModelArgs:
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
 
+        self.eos_token_id = params.get("eos_token_id", None)
         self.sliding_window_pattern = params.get("sliding_window_pattern", 1)
         if is_hf:
             self.max_context_len = params.get("max_position_embeddings")
@@ -1974,9 +1983,49 @@ class ModelArgs:
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [
-                    tokenizer.eos_token_id
-                ]  # TODO McW - Gemma 3 continues generating tokens even after the EOS token (1).
+                # Ensure we have a robust list of stop tokens including common EOS tokens
+                stop_token_candidates = []
+
+                # Add the primary EOS token
+                if hasattr(tokenizer, "eos_token_id") and tokenizer.eos_token_id is not None:
+                    stop_token_candidates.append(tokenizer.eos_token_id)
+
+                # Add common EOS token IDs that models might use
+                common_eos_tokens = [1, 2]  # Token 1 is common for many models, 2 for others
+                for token_id in common_eos_tokens:
+                    if token_id not in stop_token_candidates:
+                        stop_token_candidates.append(token_id)
+
+                # Also check if the model has a specific EOS token defined
+                if self.eos_token_id is not None and self.eos_token_id not in stop_token_candidates:
+                    stop_token_candidates.append(self.eos_token_id)
+
+                # Special handling for Gemma models: add <end_of_turn> token
+                if "gemma" in self.model_name.lower():
+                    # Gemma models use <end_of_turn> token (typically ID=106) as a stop token
+                    try:
+                        # Try to find the <end_of_turn> token in the tokenizer's vocabulary
+                        if hasattr(tokenizer, "vocab") and "<end_of_turn>" in tokenizer.vocab:
+                            end_of_turn_id = tokenizer.vocab["<end_of_turn>"]
+                        elif hasattr(tokenizer, "get_vocab"):
+                            vocab = tokenizer.get_vocab()
+                            end_of_turn_id = vocab.get("<end_of_turn>", None)
+                        else:
+                            # Fallback: <end_of_turn> is typically token ID 106 for Gemma models
+                            end_of_turn_id = 106
+
+                        if end_of_turn_id is not None and end_of_turn_id not in stop_token_candidates:
+                            stop_token_candidates.append(end_of_turn_id)
+                            logger.info(f"Added Gemma <end_of_turn> token (ID={end_of_turn_id}) to stop_tokens")
+                    except Exception as e:
+                        logger.warning(f"Failed to add Gemma <end_of_turn> token to stop_tokens: {e}")
+                        # Fallback: add known Gemma end_of_turn token ID
+                        if 106 not in stop_token_candidates:
+                            stop_token_candidates.append(106)
+                            logger.info(f"Added fallback Gemma <end_of_turn> token (ID=106) to stop_tokens")
+
+                tokenizer.stop_tokens = stop_token_candidates
+                logger.debug(f"Set stop_tokens to {tokenizer.stop_tokens} for model {self.model_name}")
             return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
@@ -2077,7 +2126,7 @@ class ModelArgs:
                 model = self.reference_transformer(wrap=False)
                 layer = model.model.embed_tokens
             else:
-                layer = reference_model.model.model.embed_tokens
+                layer = reference_model.model.embed_tokens
 
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
@@ -2091,12 +2140,8 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            # TODO: Generalize for other HF models
-            model_name_env = os.getenv("HF_MODEL")
-            if model_name_env is not None and "mistral" in model_name_env.lower():
-                wrapper = HfDecoderWrapper(layer, self.head_dim, layer.self_attn.rotary_emb)
-            else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            rotary_emb = model.model.rotary_emb
+            wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb)
             return wrapper
 
     def reference_attention(self):
@@ -2108,7 +2153,7 @@ class ModelArgs:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
             use_position_embeddings = (
-                layer.__class__.__name__ == "Qwen3Attention" or layer.__class__.__name__ == "Gemma3Attention"
+                layer.__class__.__name__ == "LlamaAttention" or layer.__class__.__name__ == "Gemma3Attention"
             )
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
