@@ -19,7 +19,7 @@ from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.common import copy_host_to_device
 
 
-class Gemma3_4BTransformer(LightweightModule):
+class Gemma3Transformer(LightweightModule):
     def __init__(
         self,
         args,

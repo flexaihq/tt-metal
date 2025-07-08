@@ -14,7 +14,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
-from models.experimental.gemma3_1b.tt.model import Gemma3_4BTransformer
+from models.experimental.gemma3_1b.tt.model import Gemma3Transformer
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -182,7 +182,7 @@ def test_model_inference(
         )
 
     # Load TTNN model
-    tt_model = Gemma3_4BTransformer(
+    tt_model = Gemma3Transformer(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,

@@ -614,7 +614,7 @@ def create_tt_model(
     num_layers=None,
 ):
     if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
-        from models.experimental.gemma3_1b.tt.model import Gemma3_4BTransformer as Transformer
+        from models.experimental.gemma3_1b.tt.model import Gemma3Transformer as Transformer
     else:
         from models.tt_transformers.tt.model import Transformer
 
