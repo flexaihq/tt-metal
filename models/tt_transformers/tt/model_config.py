@@ -233,7 +233,7 @@ class ModelOptimizations:
                 # Attention
                 TensorGroup.WQKV: PrecisionSetting.BFP8,
                 TensorGroup.WO: PrecisionSetting.BFP8,
-                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BF16,  # Upgraded from BFP8 to prevent accumulation errors
                 # Activation across whole model
                 TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
             },
@@ -243,7 +243,7 @@ class ModelOptimizations:
                 OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
                 # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
                 OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,  # Upgraded from HIFI2 for better precision
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
@@ -551,6 +551,7 @@ class ModelArgs:
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-1b-it": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
@@ -796,7 +797,7 @@ class ModelArgs:
                 k=k_dim,
                 n=n_dim,
                 grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
-                in0_block_w=1 if self.is_galaxy else None,
+                in0_block_w=32 if "gemma-3" in self.model_name else 1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
                 per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
             )
@@ -1257,7 +1258,7 @@ class ModelArgs:
             self.num_all_gather_links = (
                 2 if self.is_galaxy else 1
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
-            self.ccl_dtype = ttnn.bfloat8_b
+            self.ccl_dtype = ttnn.bfloat16 if "gemma-3" in self.model_name else ttnn.bfloat8_b
 
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")
@@ -1363,6 +1364,9 @@ class ModelArgs:
 
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
+        self.eos_token_id = config.get("eos_token_id", None)
+        self.sliding_window_pattern = config.get("sliding_window_pattern", 1)
+
         text_config = config.get("text_config", config)
 
         # Common params with different names between Meta and HF
@@ -1959,7 +1963,49 @@ class ModelArgs:
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
+                # Ensure we have a robust list of stop tokens including common EOS tokens
+                stop_token_candidates = []
+
+                # Add the primary EOS token
+                if hasattr(tokenizer, "eos_token_id") and tokenizer.eos_token_id is not None:
+                    stop_token_candidates.append(tokenizer.eos_token_id)
+
+                # Add common EOS token IDs that models might use
+                common_eos_tokens = [1, 2]  # Token 1 is common for many models, 2 for others
+                for token_id in common_eos_tokens:
+                    if token_id not in stop_token_candidates:
+                        stop_token_candidates.append(token_id)
+
+                # Also check if the model has a specific EOS token defined
+                if self.eos_token_id is not None and self.eos_token_id not in stop_token_candidates:
+                    stop_token_candidates.append(self.eos_token_id)
+
+                # Special handling for Gemma models: add <end_of_turn> token
+                if "gemma" in self.model_name.lower():
+                    # Gemma models use <end_of_turn> token (typically ID=106) as a stop token
+                    try:
+                        # Try to find the <end_of_turn> token in the tokenizer's vocabulary
+                        if hasattr(tokenizer, "vocab") and "<end_of_turn>" in tokenizer.vocab:
+                            end_of_turn_id = tokenizer.vocab["<end_of_turn>"]
+                        elif hasattr(tokenizer, "get_vocab"):
+                            vocab = tokenizer.get_vocab()
+                            end_of_turn_id = vocab.get("<end_of_turn>", None)
+                        else:
+                            # Fallback: <end_of_turn> is typically token ID 106 for Gemma models
+                            end_of_turn_id = 106
+
+                        if end_of_turn_id is not None and end_of_turn_id not in stop_token_candidates:
+                            stop_token_candidates.append(end_of_turn_id)
+                            logger.info(f"Added Gemma <end_of_turn> token (ID={end_of_turn_id}) to stop_tokens")
+                    except Exception as e:
+                        logger.warning(f"Failed to add Gemma <end_of_turn> token to stop_tokens: {e}")
+                        # Fallback: add known Gemma end_of_turn token ID
+                        if 106 not in stop_token_candidates:
+                            stop_token_candidates.append(106)
+                            logger.info(f"Added fallback Gemma <end_of_turn> token (ID=106) to stop_tokens")
+
+                tokenizer.stop_tokens = stop_token_candidates
+                logger.debug(f"Set stop_tokens to {tokenizer.stop_tokens} for model {self.model_name}")
             return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
@@ -2009,16 +2055,17 @@ class ModelArgs:
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
-                if self.cached_hf_model is None:
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                    self.cached_hf_model = model
+                if "gemma-3" in self.model_name:
+                    from transformers import Gemma3ForCausalLM
+
+                    model = Gemma3ForCausalLM.from_pretrained(self.CKPT_DIR)
                 else:
-                    model = self.cached_hf_model
-                # HACK: Assume that we want the language model layers only
-                if hasattr(model, "language_model"):
-                    model.model = model.language_model
-                    # We keep language_model because transformers don't let us change or delete it
-                model.model.layers = model.model.layers[: self.n_layers]
+                    if self.cached_hf_model is None:
+                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                        self.cached_hf_model = model
+                    else:
+                        model = self.cached_hf_model
+                    model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
                 return wrapper
@@ -2059,7 +2106,7 @@ class ModelArgs:
                 model = self.reference_transformer(wrap=False)
                 layer = model.model.embed_tokens
             else:
-                layer = reference_model.model.model.embed_tokens
+                layer = reference_model.model.embed_tokens
 
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
@@ -2073,12 +2120,13 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            # TODO: Generalize for other HF models
-            model_name_env = os.getenv("HF_MODEL")
-            if model_name_env is not None and "mistral" in model_name_env.lower():
-                wrapper = HfDecoderWrapper(layer, self.head_dim, layer.self_attn.rotary_emb)
+            rotary_emb = model.model.rotary_emb
+
+            if "gemma-3" in self.model_name:
+                wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb)
             else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+                wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb)
+
             return wrapper
 
     def reference_attention(self):
@@ -2089,7 +2137,9 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ == "Qwen3Attention"
+            use_position_embeddings = (
+                layer.__class__.__name__ == "Qwen3Attention" or layer.__class__.__name__ == "Gemma3Attention"
+            )
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2266,6 +2316,46 @@ class HfDecoderWrapper:
         result = self.decoder.forward(
             x,
             position_embeddings=position_embeddings,
+            past_key_value=self.past_key_values,
+            use_cache=True,
+            position_ids=position_ids,
+            attention_mask=mask,
+        )
+        output = result[0]
+        return output
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def load_state_dict(self, state_dict):
+        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+
+
+class HfGemmaDecoderWrapper:
+    def __init__(self, decoder, head_dim, rotary_emb):
+        from transformers import DynamicCache
+
+        self.decoder = decoder
+        self.head_dim = head_dim
+        self.rotary_emb = rotary_emb
+        self.past_key_values = DynamicCache()
+
+    def forward(self, x, start_pos, freqs_cis_i, mask=None):
+        position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        # TODO: Generalize for other HF models
+        model_name_env = os.getenv("HF_MODEL")
+        if model_name_env is not None and "mistral" in model_name_env.lower():
+            position_embeddings = self.rotary_emb(x, x.shape[1])
+        else:
+            position_embeddings = self.rotary_emb(x, position_ids)
+
+        if mask is not None:
+            while len(mask.shape) < 4:
+                mask = mask.unsqueeze(0)
+        result = self.decoder.forward(
+            x,
+            position_embeddings_global=position_embeddings,
+            position_embeddings_local=position_embeddings,
             past_key_value=self.past_key_values,
             use_cache=True,
             position_ids=position_ids,

@@ -53,17 +53,9 @@ def load_hf_state_dict(ckpt_dir):
 
 
 def standardize_hf_keys(state_dict):
-    key_meta = "lm_head.weight"
-    key_hf = "model.embed_tokens.weight"
-
-    # Check if the key_meta exists with any known prefix
-    if not any(f"{prefix}{key_meta}" in state_dict for prefix in _get_known_prefixes_mapping().keys()):
+    if not "lm_head.weight" in state_dict:
         # Assume tied to the embeddings if not present
-        for prefix in _get_known_prefixes_mapping().keys():
-            if f"{prefix}{key_hf}" in state_dict:
-                state_dict[f"{prefix}{key_meta}"] = state_dict[f"{prefix}{key_hf}"]
-                break
-
+        state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
     return state_dict
 
 
@@ -126,14 +118,12 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
         "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+        "model.layers.{layer}.pre_feedforward_layernorm.weight": "layers.{layer}.pre_feedforward_layernorm.weight",
+        "model.layers.{layer}.post_feedforward_layernorm.weight": "layers.{layer}.post_feedforward_layernorm.weight",
     }
 
     meta_state_dict = {}
     for key, tensor in loaded_weights.items():
-        # Remove known prefix if present
-        prefix = next((p for p in _get_known_prefixes_mapping().keys() if key.startswith(p)), "")
-        key = key.replace(prefix, _get_known_prefixes_mapping().get(prefix, ""), 1)
-
         if key in hf_to_meta:
             # Direct match for top-level keys
             meta_state_dict[hf_to_meta[key]] = tensor

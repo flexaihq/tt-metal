@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import re
 
 import torch
@@ -162,9 +163,8 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
-    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
-    # Values obtained from grid search
+def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Llama-3.x specific scaling for rotary embeddings."""
     low_freq_factor = 1
     high_freq_factor = 4
 
@@ -182,6 +182,32 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: in
             smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
             new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
+def compute_linear_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Linear scaling for rotary embeddings."""
+    freqs /= scale_factor
+    return freqs
+
+
+def compute_default_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Default scaling for rotary embeddings."""
+    return freqs
+
+
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
+
+    hf_model_env = os.getenv("HF_MODEL")
+
+    if hf_model_env == "google/gemma-3-1b-it":
+        freqs = compute_default_parameters(freqs, scale_factor, orig_context_len)
+    elif hf_model_env == "google/gemma-3-4b-it":
+        freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
+    elif "LLAMA_DIR" in os.environ or (hf_model_env and "llama" in hf_model_env.lower()):
+        freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
+
+    return freqs
 
 
 def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
@@ -395,17 +421,82 @@ def sample_top_p(probs: torch.Tensor, p: float):
     return torch.gather(probs_idx, -1, next_token)
 
 
-def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
+def apply_repetition_penalty(logits, generated_tokens, repetition_penalty=1.0):
+    """Apply repetition penalty to logits based on previously generated tokens."""
+    if repetition_penalty <= 1.0 or len(generated_tokens) == 0:
+        return logits
+
+    # Enhanced repetition penalty with sliding window and frequency tracking
+    token_counts = {}
+    sequence_length = len(generated_tokens)
+
+    # Use a more sophisticated weighting scheme
+    for i, token_id in enumerate(generated_tokens):
+        if token_id not in token_counts:
+            token_counts[token_id] = 0
+
+        # Position-based weighting: recent tokens get exponentially higher weights
+        position_from_end = sequence_length - i
+        if position_from_end <= 10:  # Very recent tokens (last 10)
+            weight = 5.0
+        elif position_from_end <= 25:  # Recent tokens (last 25)
+            weight = 3.0
+        elif position_from_end <= 50:  # Somewhat recent tokens (last 50)
+            weight = 1.5
+        else:  # Older tokens
+            weight = 0.5
+
+        token_counts[token_id] += weight
+
+    # Apply penalties with progressive scaling
+    for token_id, weighted_count in token_counts.items():
+        if token_id < logits.shape[-1]:  # Ensure token_id is within vocab range
+            # Calculate penalty factor based on weighted frequency
+            if weighted_count > 15.0:  # Very frequent recent tokens
+                penalty_factor = min(repetition_penalty ** (weighted_count * 0.3), 10.0)
+            elif weighted_count > 5.0:  # Moderately frequent tokens
+                penalty_factor = min(repetition_penalty ** (weighted_count * 0.5), 6.0)
+            else:  # Less frequent tokens
+                penalty_factor = min(repetition_penalty**weighted_count, 3.0)
+
+            # Handle batched tensors properly using torch.where
+            token_logits = logits[..., token_id]
+            positive_mask = token_logits > 0
+
+            # Apply penalty: divide for positive logits, multiply for negative logits
+            logits[..., token_id] = torch.where(
+                positive_mask, token_logits / penalty_factor, token_logits * penalty_factor
+            )
+
+    return logits
+
+
+def sample_host(tt_input, temperature=0.6, top_p=0.08, repetition_penalty=1.0, generated_tokens=None, on_host=True):
     vocab_size = tt_input.shape[-1]
-    pt_input = tt_input[..., :vocab_size]
+    pt_input = tt_input[..., :vocab_size].clone()  # Clone to avoid modifying original
+
+    # Apply repetition penalty if provided
+    if generated_tokens is not None and repetition_penalty > 1.0:
+        pt_input = apply_repetition_penalty(pt_input, generated_tokens, repetition_penalty)
 
     if temperature > 0:
         probs = torch.softmax(pt_input / temperature, dim=-1)
-        pt_out = sample_top_p(probs.squeeze(), top_p)
+
+        # Handle batched sampling properly
+        if probs.dim() > 1 and probs.shape[0] > 1:
+            # For batched inputs, sample each batch element separately
+            batch_size = probs.shape[0]
+            pt_out = []
+            for i in range(batch_size):
+                sampled_token = sample_top_p(probs[i], top_p)
+                pt_out.append(sampled_token)
+            pt_out = torch.stack(pt_out)
+        else:
+            pt_out = sample_top_p(probs.squeeze(), top_p)
     else:
         pt_out = torch.argmax(pt_input, dim=-1)
 
-    if pt_out.dim() == 1:  # if sampling a single token re-add the batch dim to the tensor
+    if pt_out.dim() == 1 and pt_input.dim() > 1:  # if sampling a single token re-add the batch dim to the tensor
         pt_out = pt_out.unsqueeze(0)
     return None, pt_out
 
@@ -522,7 +613,11 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    from models.tt_transformers.tt.model import Transformer
+    if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
+        from models.experimental.gemma3_1b.tt.model import Gemma3_4BTransformer as Transformer
+    else:
+        from models.tt_transformers.tt.model import Transformer
+
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(
