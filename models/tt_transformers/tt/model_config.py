@@ -713,14 +713,6 @@ class ModelArgs:
                 k_chunk_size=256 if seqlen >= 2048 else 64,
             )
 
-            # SDPA Decode config for both regular and paged attention decode
-            self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
-                exp_approx_mode=False,
-                q_chunk_size=32,
-                k_chunk_size=64,  # Increased from 32 to reduce reduction operations and accumulation errors
-            )
-
             # nlp_concat_heads_decode will shard the data across this number of cores
             assert (
                 self.n_heads % self.cluster_shape[1] == 0
@@ -1289,7 +1281,7 @@ class ModelArgs:
             self.num_all_gather_links = (
                 2 if self.is_galaxy else 1
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
-            self.ccl_dtype = ttnn.bfloat16
+            self.ccl_dtype = ttnn.bfloat16 if "gemma-3" in self.model_name else ttnn.bfloat8_b
 
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")
