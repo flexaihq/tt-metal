@@ -233,7 +233,7 @@ class ModelOptimizations:
                 # Attention
                 TensorGroup.WQKV: PrecisionSetting.BFP8,
                 TensorGroup.WO: PrecisionSetting.BFP8,
-                TensorGroup.KV_CACHE: PrecisionSetting.BF16,  # Upgraded from BFP8 to prevent accumulation errors
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
                 # Activation across whole model
                 TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
             },
@@ -243,7 +243,7 @@ class ModelOptimizations:
                 OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
                 # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
                 OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,  # Upgraded from HIFI2 for better precision
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,  # Upgraded from HIFI2 for better precision
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,

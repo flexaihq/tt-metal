@@ -421,63 +421,9 @@ def sample_top_p(probs: torch.Tensor, p: float):
     return torch.gather(probs_idx, -1, next_token)
 
 
-def apply_repetition_penalty(logits, generated_tokens, repetition_penalty=1.0):
-    """Apply repetition penalty to logits based on previously generated tokens."""
-    if repetition_penalty <= 1.0 or len(generated_tokens) == 0:
-        return logits
-
-    # Enhanced repetition penalty with sliding window and frequency tracking
-    token_counts = {}
-    sequence_length = len(generated_tokens)
-
-    # Use a more sophisticated weighting scheme
-    for i, token_id in enumerate(generated_tokens):
-        if token_id not in token_counts:
-            token_counts[token_id] = 0
-
-        # Position-based weighting: recent tokens get exponentially higher weights
-        position_from_end = sequence_length - i
-        if position_from_end <= 10:  # Very recent tokens (last 10)
-            weight = 5.0
-        elif position_from_end <= 25:  # Recent tokens (last 25)
-            weight = 3.0
-        elif position_from_end <= 50:  # Somewhat recent tokens (last 50)
-            weight = 1.5
-        else:  # Older tokens
-            weight = 0.5
-
-        token_counts[token_id] += weight
-
-    # Apply penalties with progressive scaling
-    for token_id, weighted_count in token_counts.items():
-        if token_id < logits.shape[-1]:  # Ensure token_id is within vocab range
-            # Calculate penalty factor based on weighted frequency
-            if weighted_count > 15.0:  # Very frequent recent tokens
-                penalty_factor = min(repetition_penalty ** (weighted_count * 0.3), 10.0)
-            elif weighted_count > 5.0:  # Moderately frequent tokens
-                penalty_factor = min(repetition_penalty ** (weighted_count * 0.5), 6.0)
-            else:  # Less frequent tokens
-                penalty_factor = min(repetition_penalty**weighted_count, 3.0)
-
-            # Handle batched tensors properly using torch.where
-            token_logits = logits[..., token_id]
-            positive_mask = token_logits > 0
-
-            # Apply penalty: divide for positive logits, multiply for negative logits
-            logits[..., token_id] = torch.where(
-                positive_mask, token_logits / penalty_factor, token_logits * penalty_factor
-            )
-
-    return logits
-
-
-def sample_host(tt_input, temperature=0.6, top_p=0.08, repetition_penalty=1.0, generated_tokens=None, on_host=True):
+def sample_host(tt_input, temperature=0.6, top_p=0.08, on_host=True):
     vocab_size = tt_input.shape[-1]
-    pt_input = tt_input[..., :vocab_size].clone()  # Clone to avoid modifying original
-
-    # Apply repetition penalty if provided
-    if generated_tokens is not None and repetition_penalty > 1.0:
-        pt_input = apply_repetition_penalty(pt_input, generated_tokens, repetition_penalty)
+    pt_input = tt_input[..., :vocab_size]
 
     if temperature > 0:
         probs = torch.softmax(pt_input / temperature, dim=-1)
@@ -496,7 +442,7 @@ def sample_host(tt_input, temperature=0.6, top_p=0.08, repetition_penalty=1.0, g
     else:
         pt_out = torch.argmax(pt_input, dim=-1)
 
-    if pt_out.dim() == 1 and pt_input.dim() > 1:  # if sampling a single token re-add the batch dim to the tensor
+    if pt_out.dim() == 1:  # if sampling a single token re-add the batch dim to the tensor
         pt_out = pt_out.unsqueeze(0)
     return None, pt_out
 
