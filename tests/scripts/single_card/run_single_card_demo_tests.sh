@@ -21,6 +21,12 @@ run_qwen7b_func() {
 
 }
 
+run_gemma3_1b_func(){
+
+  MESH_DEVICE=N150 HF_MODEL=google/gemma-3-1b-it WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
+
+}
+
 run_segformer_func() {
 
   #Segformer Segmentation Demo
