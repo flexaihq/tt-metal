@@ -11,7 +11,6 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, preprocess_inputs_prefill
-from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
 
@@ -199,6 +198,12 @@ def test_tt_model_acc(
                 mesh_shape=model_args.cluster_shape,
             ),
         )
+    if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
+        from models.experimental.gemma3_1b.tt.model import Gemma3Transformer as Transformer
+
+        HF_MODEL = os.environ["HF_MODEL"]
+    else:
+        HF_MODEL = None
 
     # Initialize TT model
     tt_model = Transformer(
@@ -247,6 +252,9 @@ def test_tt_model_acc(
         prefill_input = model_args.prepare_residual_tensor_prefill(
             pt_prefill_input[batch_id],
         )
+        if HF_MODEL == "google/gemma-3-1b-it":
+            # For Gemma-3.1b-it, we need to provide rot_mats as a list
+            rot_mats_prefill = [rot_mats_prefill, rot_mats_prefill]
 
         tt_out = tt_model(
             prefill_input,
@@ -305,6 +313,9 @@ def test_tt_model_acc(
             pt_decode_input,
             model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
+        if HF_MODEL == "google/gemma-3-1b-it":
+            # For Gemma-3.1b-it, we need to provide rot_mats as a list
+            rot_mats = [rot_mats, rot_mats]
         # Run TT model
         tt_out = tt_model(
             decode_input,
