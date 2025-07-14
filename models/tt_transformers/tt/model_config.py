@@ -1713,7 +1713,7 @@ class ModelArgs:
             if is_vision:
                 base_prefix = "vision_tower."  # Handle TODO
             else:
-                base_prefix = ""
+                base_prefix = "language_model."
         else:
             base_prefix = "text_model." if not is_vision else ""
 
@@ -2539,7 +2539,6 @@ class ModelArgs:
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
-            wrapper = HfAttentionWrapper(layer, self.head_dim, model.rotary_emb if use_position_embeddings else None)
             return wrapper
 
     def set_tg_attention_config(self):
