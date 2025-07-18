@@ -4,6 +4,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
+from models.experimental.qwen25_vl.tt.text_mlp import MLP as QwenMLP
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
@@ -52,15 +53,26 @@ class TransformerBlock(LightweightModule):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
         )
-        self.feed_forward = MLP(
-            mesh_device=mesh_device,
-            args=args,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            layer_num=layer_num,
-            dtype=dtype,
-            model_config=self.model_config,
-        )
+        if self.args.base_model_name == "Qwen2.5-VL-7B":
+            self.feed_forward = QwenMLP(
+                mesh_device=mesh_device,
+                args=args,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                layer_num=layer_num,
+                dtype=dtype,
+                model_config=self.model_config,
+            )
+        else:
+            self.feed_forward = MLP(
+                mesh_device=mesh_device,
+                args=args,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                layer_num=layer_num,
+                dtype=dtype,
+                model_config=self.model_config,
+            )
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
