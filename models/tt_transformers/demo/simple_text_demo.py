@@ -183,7 +183,7 @@ def prepare_generator_args(
             optimizations=optimizations,
             max_seq_len=max_seq_len,
             paged_attention_config=paged_attention_config,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             state_dict=state_dict,
         )
         model_args.append(model_args_i)
