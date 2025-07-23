@@ -72,7 +72,6 @@ def test_rmsnorm_singledevice(device, is_sharded, reset_seeds):
         dim=dim,
         state_dict=state_dict,
         weight_key="rmsnorm",
-        is_sharded=is_sharded,
     )
     input = torch.rand(1, 1, 32, dim)
     reference_output = reference_model(input)
@@ -84,7 +83,7 @@ def test_rmsnorm_singledevice(device, is_sharded, reset_seeds):
         layout=ttnn.TILE_LAYOUT,
     )
 
-    tt_output = tt_model(tt_input)
+    tt_output = tt_model(tt_input, in_sharded=is_sharded, out_sharded=is_sharded, mode="prefill")
     tt_output_torch = ttnn.to_torch(tt_output)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
@@ -116,7 +115,6 @@ def test_rmsnorm_multidevice(t3k_mesh_device, is_sharded, reset_seeds):
         dim=dim,
         state_dict=state_dict,
         weight_key="rmsnorm",
-        is_sharded=is_sharded,
     )
     input = torch.rand(1, 1, 32, dim)
     reference_output = reference_model(input)
@@ -129,7 +127,7 @@ def test_rmsnorm_multidevice(t3k_mesh_device, is_sharded, reset_seeds):
         mesh_mapper=ReplicateTensorToMesh(t3k_mesh_device),
     )
 
-    tt_output = tt_model(tt_input)
+    tt_output = tt_model(tt_input, in_sharded=is_sharded, out_sharded=is_sharded, mode="prefill")
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=0))[0]
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
