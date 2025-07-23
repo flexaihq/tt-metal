@@ -86,6 +86,7 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling_factor,
         model_args.orig_context_len,
+        rope_type=model_args.rope_type,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
 

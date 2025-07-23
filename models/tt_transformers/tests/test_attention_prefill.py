@@ -75,14 +75,36 @@ def test_attention_inference(
     reference_model.load_state_dict(partial_state_dict)
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(
-        model_args.head_dim,
-        mesh_device,
-        max_seq_len,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
-    )
+    if model_args.sliding_window > 0 and model_args.sliding_window_pattern > 0:
+        rot_mats_local = get_prefill_rot_mat(
+            model_args.head_dim,
+            mesh_device,
+            max_seq_len,
+            model_args.local_rope_theta,
+            None,
+            model_args.orig_context_len,
+            rope_type="default",
+        )
+        rot_mats_global = get_prefill_rot_mat(
+            model_args.head_dim,
+            mesh_device,
+            max_seq_len,
+            model_args.rope_theta,
+            model_args.rope_scaling_factor,
+            model_args.orig_context_len,
+            rope_type=model_args.rope_type,
+        )
+        rot_mats = [rot_mats_global, rot_mats_local]
+    else:
+        rot_mats = get_prefill_rot_mat(
+            model_args.head_dim,
+            mesh_device,
+            max_seq_len,
+            model_args.rope_theta,
+            model_args.rope_scaling_factor,
+            model_args.orig_context_len,
+            rope_type=model_args.rope_type,
+        )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
 
     transformation_mats_prefill = ttnn.as_tensor(
@@ -162,6 +184,7 @@ def test_attention_inference(
     )[positions]
     attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
     attn_mask_torch = torch.triu(attn_mask, diagonal=1)
+    assert reference_model.is_sliding, "Local rope needed"
     reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)

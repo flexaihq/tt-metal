@@ -84,14 +84,37 @@ def test_decoder_inference(
     all_tests_pass = True
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(
-        model_args.head_dim,
-        mesh_device,
-        max_seq_len,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
-    )
+    if model_args.sliding_window > 0 and model_args.sliding_window_pattern > 0:
+        rot_mats_local = get_prefill_rot_mat(
+            model_args.head_dim,
+            mesh_device,
+            max_seq_len,
+            model_args.local_rope_theta,
+            None,
+            model_args.orig_context_len,
+            rope_type="default",
+        )
+        rot_mats_global = get_prefill_rot_mat(
+            model_args.head_dim,
+            mesh_device,
+            max_seq_len,
+            model_args.rope_theta,
+            model_args.rope_scaling_factor,
+            model_args.orig_context_len,
+            rope_type=model_args.rope_type,
+        )
+        rot_mats = [rot_mats_global, rot_mats_local]
+        logger.info("HERE")
+    else:
+        rot_mats = get_prefill_rot_mat(
+            model_args.head_dim,
+            mesh_device,
+            max_seq_len,
+            model_args.rope_theta,
+            model_args.rope_scaling_factor,
+            model_args.orig_context_len,
+            rope_type=model_args.rope_type,
+        )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
