@@ -11,7 +11,6 @@
 #include <utility>
 
 #include <pybind11/operators.h>
-#include <pybind11/stl.h>
 
 #include "ttnn-pybind/export_enum.hpp"
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.

@@ -28,14 +28,14 @@ void LayerNorm::validate(
     const auto& beta = optional_input_tensors.at(2);
     const auto& stats = optional_input_tensors.at(3);
 
-    TT_FATAL(a.layout() == Layout::TILE, "Error");
+    TT_FATAL(a.layout() == Layout::TILE, "layout is not tile");
     TT_FATAL(
         a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B, "Error");
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
 
     if (b.has_value()) {
-        TT_FATAL(b.value().layout() == Layout::TILE, "layot is not tile!");
+        TT_FATAL(b.value().layout() == Layout::TILE, "layout is not tile!");
         TT_FATAL(a.padded_shape() == b.value().padded_shape(), "shape is not same!");
         TT_FATAL(b.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
         TT_FATAL(a.device() == b.value().device(), "device is not same!");
@@ -57,7 +57,13 @@ void LayerNorm::validate(
             TT_FATAL(
                 (gamma.value().padded_shape()[-1] == TILE_WIDTH &&
                  gamma.value().physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
-                "Error");
+                "{} == {} && {} / {} == {} / {}",
+                gamma.value().padded_shape()[-1],
+                TILE_WIDTH,
+                gamma.value().physical_volume(),
+                TILE_WIDTH,
+                a.padded_shape()[-1],
+                TILE_WIDTH);
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
@@ -81,7 +87,13 @@ void LayerNorm::validate(
             TT_FATAL(
                 (beta.value().padded_shape()[-1] == TILE_WIDTH &&
                  beta.value().physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
-                "Error");
+                "{} == {} && {} / {} == {} / {}",
+                beta.value().padded_shape()[-1],
+                TILE_WIDTH,
+                beta.value().physical_volume(),
+                TILE_WIDTH,
+                a.padded_shape()[-1],
+                TILE_WIDTH);
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == beta.value().device(), "Error");
