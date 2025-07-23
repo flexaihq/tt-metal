@@ -152,9 +152,15 @@ def preprocess_inputs_prefill(
     )
 
 
-def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
+def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None, multimodal=False):
     """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
     chat = []
+    if multimodal:
+        if system_prompt_text:
+            system_prompt_text = {"type": "text", "text": system_prompt_text}
+        if prompt_text:
+            prompt_text = {"type": "text", "text": prompt_text}
+
     if system_prompt_text:
         chat.append({"role": "system", "content": system_prompt_text})
     if prompt_text:
@@ -162,7 +168,16 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+def apply_default_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    return freqs
+
+
+def apply_linear_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    freqs /= scale_factor
+    return freqs
+
+
+def apply_llama3_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
     # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
     # Values obtained from grid search
     low_freq_factor = 1
@@ -184,7 +199,22 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: in
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
-def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int, rope_type="llama3"):
+    def unimplemented_rope_type(freqs, scale_factor, orig_context_len):
+        raise NotImplementedError(f"ROPE type '{rope_type}' is not implemented")
+
+    ROPE_TYPES = {
+        "default": apply_default_scaling,
+        "linear": apply_linear_scaling,
+        "dynamic": unimplemented_rope_type,
+        "yarn": unimplemented_rope_type,
+        "longrope": unimplemented_rope_type,
+        "llama3": apply_llama3_scaling,
+    }
+    return ROPE_TYPES[rope_type](freqs, scale_factor, orig_context_len)
+
+
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, rope_type="llama3"):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -199,14 +229,14 @@ def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
     if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
 
 def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
     """
-    Transform cos/sin frequencies to a rotation matrix.
+    Transfo[0]rm cos/sin frequencies to a rotation matrix.
     """
     emb_size, emb_dim = cos_freqs.shape
     dhead = emb_dim * 2
@@ -229,9 +259,16 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, orig_context_len, start_pos=0):
+def get_prefill_rot_mat(
+    head_dim, mesh_device, seq_len, theta, scale_factor, orig_context_len, start_pos=0, rope_type="llama3"
+):
     cos, sin = precompute_freqs(
-        head_dim, seq_len * 2, theta=theta, scale_factor=scale_factor, orig_context_len=orig_context_len
+        head_dim,
+        seq_len * 2,
+        theta=theta,
+        scale_factor=scale_factor,
+        orig_context_len=orig_context_len,
+        rope_type=rope_type,
     )
     cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
     assert cos_gathered.size() == (1, 1, seq_len, head_dim)
@@ -275,10 +312,11 @@ def get_single_rot_mat(
     scale_factor,
     orig_context_len,
     on_host=False,
+    rope_type="llama3",
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if scale_factor is not None:
-        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len, rope_type)
     rot_matrix = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of rot_matrix
     sin_freqs, cos_freqs = torch.sin(freqs).to(rot_matrix.dtype), torch.cos(freqs).to(rot_matrix.dtype)
@@ -291,7 +329,7 @@ def get_single_rot_mat(
     # Support for start_pos different than 0
     freqs = start_pos * freqs_unscaled
     if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type)
     current_rot_mat = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of current_rot_mat
     sin_freqs, cos_freqs = torch.sin(freqs).to(current_rot_mat.dtype), torch.cos(freqs).to(current_rot_mat.dtype)
@@ -506,6 +544,9 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
 
 
 def get_base_model_name(model_name: str) -> str:
+    if model_name.startswith("gemma"):
+        return model_name
+
     # Remove the suffix after B- (case insensitive), e.g. "Llama-3.1-70B-Instruct" -> "Llama-3.1-70B"
     match = re.search(r"(.*?\d+[bB])-", model_name)
     return match.group(1) if match else model_name
@@ -513,12 +554,12 @@ def get_base_model_name(model_name: str) -> str:
 
 def create_tt_model(
     mesh_device,
-    instruct,
-    max_batch_size,
+    instruct: bool,
+    max_batch_size: int,
     optimizations,
-    max_seq_len,
+    max_seq_len: int,
     paged_attention_config: PagedAttentionConfig = None,
-    dtype=ttnn.bfloat8_b,
+    dtype=ttnn.bfloat16,
     state_dict=None,
     num_layers=None,
 ):

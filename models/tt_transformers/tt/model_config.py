@@ -421,9 +421,9 @@ class ModelArgs:
         optimizations=None,
         cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
     ):
-        self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
+        self.num_devices: int = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
-        self.arch_name = ttnn.get_arch_name()
+        self.arch_name: str = ttnn.get_arch_name()
         self.dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
 
         self.device_name = determine_device_name(self.mesh_device)
@@ -431,23 +431,29 @@ class ModelArgs:
         logger.info(f"Inferring device name: {self.device_name}")
         device = mesh_device if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape) if mesh_device is not None else None
-        self.is_galaxy = self.num_devices == 32
+        self.is_galaxy: bool = self.num_devices == 32
 
-        self.model_name = "Unknown"  # Llama model name will be dependent on the checkpoint directory
-        self.max_seq_len = max_seq_len
-        self.max_batch_size = max_batch_size
-        self.tile_size = 32
-        self.is_70b = False
-        self.is_90b = False
-        self.from_hf_url = False  # updated below if true
+        self.model_name: str = "Unknown"  # Llama model name will be dependent on the checkpoint directory
+        self.max_seq_len: int = max_seq_len
+        self.max_batch_size: int = max_batch_size
+        self.tile_size: int = 32
+        self.is_70b: bool = False
+        self.is_90b: bool = False
+        self.use_pre_ffn: bool = False
+        self.use_post_ffn: bool = False
+        self.sliding_window: int = 0
+        self.sliding_window_pattern: int = 0
+        self.mlp_activation_type = ttnn.UnaryOpType.SILU
+        self.from_hf_url: bool = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
+        self.is_multimodal = False
 
-        assert not os.getenv(
-            "FAKE_DEVICE"
-        ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
+        assert not os.getenv("FAKE_DEVICE"), (
+            "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
+        )
 
         # Remove trailing slashes so basename gets the right model name
         LLAMA_DIR = os.getenv("LLAMA_DIR")
@@ -474,15 +480,20 @@ class ModelArgs:
             ]  # HF model names use / even on windows. May be overridden by config.
             self.from_hf_url = True
         else:
-            assert (
-                False
-            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
+            assert False, (
+                "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
+            )
+
+        if "gemma-3" in self.model_name.lower():
+            self.use_post_ffn = True
+            self.use_pre_ffn = True
+            self.is_multimodal = True
 
         if not dummy_weights and not HF_MODEL:
             # Assert if all folders and files exist
-            assert os.path.exists(
-                self.CKPT_DIR
-            ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
+            assert os.path.exists(self.CKPT_DIR), (
+                f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
+            )
             os.makedirs(self.CACHE_PATH, exist_ok=True)
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
@@ -500,7 +511,7 @@ class ModelArgs:
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.CKPT_DIR.lower():
+        if any(word in self.CKPT_DIR.lower() for word in ["it", "instruct"]):
             self.instruct = True
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
@@ -553,6 +564,8 @@ class ModelArgs:
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "gemma-3-4b-it": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-12b-it": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -564,9 +577,9 @@ class ModelArgs:
                     f"Try setting MAX_PREFILL_CHUNK_SIZE to larger powers of 2 up to e.g. 128 for faster performance (if you run out of L1 memory it was too high)"
                 )
                 max_prefill_chunk_size_div1024 = 4
-            assert (
-                max_prefill_chunk_size_div1024 is not None
-            ), f"Unsupported model {self.model_name} on device {self.device_name}"
+            assert max_prefill_chunk_size_div1024 is not None, (
+                f"Unsupported model {self.model_name} on device {self.device_name}"
+            )
         else:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
@@ -687,9 +700,9 @@ class ModelArgs:
             )
 
             # nlp_concat_heads_decode will shard the data across this number of cores
-            assert (
-                self.n_heads % self.cluster_shape[1] == 0
-            ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
+            assert self.n_heads % self.cluster_shape[1] == 0, (
+                f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
+            )
 
             # Note: for some models (e.g. Mistral-Small) n_heads * head_dim != dim
             self.model_config["ATTN_OUTPUT_PROGCFG"] = (
@@ -834,6 +847,9 @@ class ModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
+            assert self.n_kv_heads % self.cluster_shape[1] == 0, (
+                f"n_kv_heads ({self.n_kv_heads}) must be divisible by num_devices ({self.cluster_shape[1]})"
+            )
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.MAX_QKV_MM_SEQ_LEN = 2048
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -842,7 +858,8 @@ class ModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
+                    1,
+                    8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
                     self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
@@ -852,7 +869,6 @@ class ModelArgs:
                 fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
             )
 
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
                 (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
                 ttnn.CoreGrid(y=8, x=8),
@@ -887,14 +903,14 @@ class ModelArgs:
                 packer_l1_acc=False,
             )
 
-            self.model_config[
-                "SCORES_BATCHED_MM_OUTPUT_MEMCFG"
-            ] = lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
-                shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),  # self.n_heads padded to tile size
-                core_grid=ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
+            self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = (
+                lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
+                    shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),  # self.n_heads padded to tile size
+                    core_grid=ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
             )
 
             # MLP configs
@@ -1386,6 +1402,11 @@ class ModelArgs:
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
 
+        self.bos_token_ids: [int] | None = config.get("bos_token_id", None)
+        self.pad_token_ids: [int] | None = config.get("pad_token_id", None)
+        self.eos_token_ids: [int] = config.get("eos_token_id", [])
+        self.sep_token_ids: [int] | None = config.get("sep_token_id", None)
+
         # Common params with different names between Meta and HF
         self.dim = text_config.get("dim", text_config.get("hidden_size"))
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
@@ -1396,6 +1417,8 @@ class ModelArgs:
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+        self.sliding_window = text_config.get("sliding_window", 0)
+        self.sliding_window_pattern = text_config.get("sliding_window_pattern", 0)
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -1406,11 +1429,11 @@ class ModelArgs:
         # Handle different MLP dimension specifications
         if "intermediate_size" in text_config:
             self.hidden_dim = text_config["intermediate_size"]
-            self.ffn_dim_multiplier = None
-            self.multiple_of = None
+            self.ffn_dim_multiplier = 1
+            self.multiple_of = 1
         else:
-            self.ffn_dim_multiplier = text_config["ffn_dim_multiplier"]
-            self.multiple_of = text_config["multiple_of"]
+            self.ffn_dim_multiplier = text_config.get("ffn_dim_multiplier", 1)
+            self.multiple_of = text_config.get("multiple_of", 1)
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
         if "_name_or_path" in config:
@@ -1457,14 +1480,19 @@ class ModelArgs:
 
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
+        self.local_rope_theta = text_config.get("rope_local_base_freq", self.rope_theta)
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
         rope_scaling_params = text_config.get("rope_scaling", None)
         if rope_scaling_params:
+            self.rope_type = rope_scaling_params.get(
+                "rope_type", "llama3"
+            )  # one of ['default', 'linear', 'dynamic', 'yarn', 'longrope', 'llama3']
             self.rope_scaling_factor = rope_scaling_params.get("factor", None)
             self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", self.max_context_len)
         else:
+            self.rope_type = "llama3"  # one of ['default', 'linear', 'dynamic', 'yarn', 'longrope', 'llama3']
             self.rope_scaling_factor = None
             self.orig_context_len = None
 
@@ -1581,13 +1609,17 @@ class ModelArgs:
     multiple_of={self.multiple_of},
     ffn_dim_multiplier={self.ffn_dim_multiplier},
     norm_eps={self.norm_eps},
+    rope_type={self.rope_type},
     rope_theta={self.rope_theta},
+    local_rope_theta={self.local_rope_theta},
     rope_scaling_factor={self.rope_scaling_factor},
     max_batch_size={self.max_batch_size},
     max_seq_len={self.max_seq_len},
+    mlp_activation_type={self.mlp_activation_type},
     vision_chunk_size={self.vision_chunk_size},
     vision_max_num_chunks={self.vision_max_num_chunks},
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
+    eos_token_ids={self.eos_token_ids}
 )"""
 
     def is_vision(self):
@@ -1644,13 +1676,14 @@ class ModelArgs:
 
                 model = AutoModelForCausalLM.from_pretrained(
                     self.CKPT_DIR,
-                    torch_dtype="auto"
+                    torch_dtype="auto",
                     # Note that the default setting is torch.dtype.float32, but model weights are
                     # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                     # unnecessary cast.
                 )
                 if self.cache_hf_flag:
                     self.cached_hf_model = model
+
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
@@ -1700,9 +1733,9 @@ class ModelArgs:
         )  # TODO: Needed for TG hang workaround
 
         if in0_block_w is None:
-            assert (
-                k % (self.tile_size * grid_size[1]) == 0
-            ), f"Input width must be divisible by tile size times grid size"
+            assert k % (self.tile_size * grid_size[1]) == 0, (
+                f"Input width must be divisible by tile size times grid size"
+            )
             in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -1781,8 +1814,12 @@ class ModelArgs:
                 rows = i
                 break
 
-        assert cols is not None, f"Cannot find a number of columns that evenly divides into {col_tiles}, not even 1(!)."
-        assert rows is not None, f"Cannot find a number of rows that evenly divides into {row_tiles}, not even 1(!)."
+        assert cols is not None, (
+            f"Cannot find a number of columns that evenly divides into {col_tiles} tiles, not even 1(!)."
+        )
+        assert rows is not None, (
+            f"Cannot find a number of rows that evenly divides into {row_tiles} tiles, not even 1(!)."
+        )
         return rows, cols
 
     def dram_shard_core_grid_for_k_and_n(self, k: int, n: int) -> Tuple[int, int]:
@@ -1836,9 +1873,9 @@ class ModelArgs:
         if num_cores is None:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
             num_cores = self.dram_shard_core_grid_for_k_and_n(k, n).num_cores
-            assert (
-                k % (self.tile_size * num_cores) == 0
-            ), f"k must be divisible by tile_size * num_cores: {k} % {self.tile_size * num_cores} != 0"
+            assert k % (self.tile_size * num_cores) == 0, (
+                f"k must be divisible by tile_size * num_cores: {k} % {self.tile_size * num_cores} != 0"
+            )
             # assert n % (self.tile_size * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {self.tile_size * num_cores} != 0"
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=self.find_largest_divisor(k // (self.tile_size * num_cores)),
@@ -1941,7 +1978,11 @@ class ModelArgs:
         Args:
             grid (ttnn.CoreGrid): Grid specification for the norm operation
         """
+        assert self.dim >= grid.num_cores and self.dim // grid.num_cores >= self.tile_size
         block_w = self.dim // grid.num_cores // self.tile_size
+        assert self.tile_padded_batch_rows >= self.tile_size
+        block_h = self.tile_padded_batch_rows // self.tile_size
+
         # Find largest value <= 4 that evenly divides block_w
         subblock_w = 4
         while subblock_w > 0:
@@ -1951,7 +1992,7 @@ class ModelArgs:
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[grid.x, grid.y],
             subblock_w=subblock_w,
-            block_h=self.tile_padded_batch_rows // self.tile_size,
+            block_h=block_h,
             block_w=block_w,
             inplace=False,
         )
@@ -2067,8 +2108,9 @@ class ModelArgs:
                     raise e
 
             # Add meta-compatible stop token list to the HF tokenizer
-            if not "stop_tokens" in tokenizer.__dict__:
+            if "stop_tokens" not in tokenizer.__dict__:
                 tokenizer.stop_tokens = [tokenizer.eos_token_id]
+            tokenizer.stop_tokens = list(set(tokenizer.stop_tokens + self.eos_token_ids))
             return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
@@ -2080,7 +2122,7 @@ class ModelArgs:
         else:
             if instruct:
                 try:
-                    return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
+                    return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text, self.is_multimodal)
                 except ValueError as e:
                     logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
                     logger.warning(f"Falling back to base model encoding with no chat template")
@@ -2120,16 +2162,21 @@ class ModelArgs:
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    # HACK: Assume that we want the language model layers only
+                    if hasattr(model, "language_model"):
+                        model = model.language_model
+                        logger.info(f"MODEL IS NOW\n{model.model}")
                     self.cached_hf_model = model
                 elif self.cache_hf_flag and self.cached_hf_model is not None:
                     model = self.cached_hf_model
                 else:
                     # No caching - load fresh each time
                     model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                # HACK: Assume that we want the language model layers only
-                if hasattr(model, "language_model"):
-                    model.model = model.language_model
-                    # We keep language_model because transformers don't let us change or delete it
+                    # HACK: Assume that we want the language model layers only
+                    if hasattr(model, "language_model"):
+                        model.model = model.language_model.model
+                        logger.info(f"MODEL IS NOW\n{model.model}")
+                        # We keep language_model because transformers don't let us change or delete it
                 model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
@@ -2185,7 +2232,9 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            rotary_emb_local = getattr(model.model, "rotary_emb_local", None)
+            rotary_emb = getattr(model.model, "rotary_emb", None)
+            wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
             return wrapper
 
     def reference_attention(self):
@@ -2196,10 +2245,8 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in ("Qwen3Attention", "MistralAttention")
-            wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
-            )
+            rotary_emb = getattr(model.model, "rotary_emb", None)
+            wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb)
             return wrapper
 
     def set_tg_attention_config(self):
@@ -2350,29 +2397,47 @@ class HfAttentionWrapper:
 
 
 class HfDecoderWrapper:
-    def __init__(self, decoder, head_dim, rotary_emb):
+    def __init__(self, decoder, head_dim, rotary_emb=None, rotary_emb_local=None):
         from transformers import DynamicCache
 
         self.decoder = decoder
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
+        self.rotary_emb_local = rotary_emb_local
         self.past_key_values = DynamicCache()
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
+        cache_position = torch.zeros(1)
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
         position_embeddings = self.rotary_emb(x, position_ids)
+        position_embeddings_local = None
+        if self.rotary_emb_local:
+            position_embeddings_local = self.rotary_emb_local(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
-        result = self.decoder.forward(
-            x,
-            position_embeddings=position_embeddings,
-            past_key_value=self.past_key_values,
-            use_cache=True,
-            position_ids=position_ids,
-            attention_mask=mask,
-        )
+
+        if self.rotary_emb_local:
+            result = self.decoder.forward(
+                x,
+                position_embeddings=position_embeddings,
+                position_embeddings_local=position_embeddings_local,
+                past_key_value=self.past_key_values,
+                use_cache=True,
+                position_ids=position_ids,
+                cache_position=cache_position,
+                attention_mask=mask,
+            )
+        else:
+            result = self.decoder.forward(
+                x,
+                position_embeddings=position_embeddings,
+                past_key_value=self.past_key_values,
+                use_cache=True,
+                position_ids=position_ids,
+                attention_mask=mask,
+            )
         output = result[0]
         return output
 

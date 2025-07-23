@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from enum import Enum, auto
 
 import torch
 
@@ -11,6 +12,12 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+
+
+class AttentionType(Enum):
+    FULL = auto()
+    GLOBAL = auto()
+    LOCAL_SLIDING = auto()
 
 
 class Attention(LightweightModule):
@@ -25,6 +32,7 @@ class Attention(LightweightModule):
         configuration,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        attention_type: AttentionType = AttentionType.FULL,
     ):
         super().__init__()
 
@@ -54,6 +62,7 @@ class Attention(LightweightModule):
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
+        self.attention_type = attention_type
 
         self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
@@ -97,8 +106,11 @@ class Attention(LightweightModule):
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
-        self.activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
-            decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
+        self.activation_dtype = (
+            self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+                decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
+            )
+            or self.dtype
         )
         self.wqkv_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.WQKV

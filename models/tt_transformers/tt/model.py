@@ -30,9 +30,9 @@ class Transformer(LightweightModule):
     ):
         super().__init__()
         self.args = args
-        self.vocab_size = args.vocab_size
+        self.vocab_size: int = args.vocab_size
         assert self.vocab_size > 0
-        self.n_layers = args.n_layers
+        self.n_layers: int = args.n_layers
         self.mesh_device = mesh_device
         self.dtype = dtype
         self.model_config = args.get_model_config()
@@ -55,7 +55,20 @@ class Transformer(LightweightModule):
             args.rope_theta,
             args.rope_scaling_factor,
             args.orig_context_len,
+            args.rope_type,
         )
+
+        self.rope_setup_local = RotarySetup(
+            mesh_device,
+            args.max_batch_size,
+            args.head_dim,
+            args.max_seq_len,
+            args.local_rope_theta,
+            None,
+            args.orig_context_len,
+            "default",
+        )
+
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
         self.layers = [
@@ -125,9 +138,14 @@ class Transformer(LightweightModule):
         assert (
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
-        tt_rot_mats_prefill = [
+        tt_rot_mats_prefill_global = [
             self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+        ]
+
+        tt_rot_mats_prefill_local = [
+            self.rope_setup_local.cos_matrix[:, :, start_pos : start_pos + S, :],
+            self.rope_setup_local.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
 
         if page_table is not None:
@@ -152,7 +170,7 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
+        return tokens_embd, [tt_rot_mats_prefill_global, tt_rot_mats_prefill_local], tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -224,13 +242,14 @@ class Transformer(LightweightModule):
         Embed tokens
         """
         tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
+        tt_rot_mats_local = self.rope_setup_local.get_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         tt_tokens = ttnn.to_memory_config(
             tt_tokens,
             self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
-        return tt_tokens, current_pos, tt_rot_mats, page_table
+        return tt_tokens, current_pos, [tt_rot_mats, tt_rot_mats_local], page_table
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """
@@ -393,5 +412,6 @@ class Transformer(LightweightModule):
 
         if mode == "prefill":
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         return x

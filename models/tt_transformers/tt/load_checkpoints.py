@@ -18,8 +18,8 @@ def _get_known_prefixes_mapping():
         "text_model.": "",
         "vision_model.": "",
         # Gemma3
-        "model.language_model.": "model.",
-        "model.vision_tower.": "model.",
+        "language_model.model.": "model.",
+        "vision_tower.model.": "model.",
     }
 
 
@@ -54,14 +54,14 @@ def load_hf_state_dict(ckpt_dir):
 
 def standardize_hf_keys(state_dict):
     key_meta = "lm_head.weight"
-    key_hf = "model.embed_tokens.weight"
+    key_hf = "embed_tokens.weight"
 
     # Check if the key_meta exists with any known prefix
     if not any(f"{prefix}{key_meta}" in state_dict for prefix in _get_known_prefixes_mapping().keys()):
         # Assume tied to the embeddings if not present
         for prefix in _get_known_prefixes_mapping().keys():
             if f"{prefix}{key_hf}" in state_dict:
-                state_dict[f"{prefix}{key_meta}"] = state_dict[f"{prefix}{key_hf}"]
+                state_dict[f"{_get_known_prefixes_mapping()[prefix]}{key_meta}"] = state_dict[f"{prefix}{key_hf}"]
                 break
 
     return state_dict
@@ -77,9 +77,11 @@ def convert_hf_to_meta(state_dict, head_dim):
 def map_hf_to_meta_keys(loaded_weights):
     hf_to_meta = {
         # Top level mappings
+        "embed_tokens.weight": "tok_embeddings.weight",
         "model.embed_tokens.weight": "tok_embeddings.weight",
         "model.norm.weight": "norm.weight",
         "lm_head.weight": "output.weight",
+        "model.lm_head.weight": "output.weight",
         # Layer level mappings
         "input_layernorm.weight": "attention_norm.weight",
         "post_attention_layernorm.weight": "ffn_norm.weight",
@@ -126,9 +128,12 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
         "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+        "model.layers.{layer}.pre_feedforward_layernorm.weight": "layers.{layer}.pre_feedforward_layernorm.weight",
+        "model.layers.{layer}.post_feedforward_layernorm.weight": "layers.{layer}.post_feedforward_layernorm.weight",
     }
 
     meta_state_dict = {}
+
     for key, tensor in loaded_weights.items():
         # Remove known prefix if present
         prefix = next((p for p in _get_known_prefixes_mapping().keys() if key.startswith(p)), "")
@@ -136,14 +141,17 @@ def map_hf_to_meta_keys(loaded_weights):
 
         if key in hf_to_meta:
             # Direct match for top-level keys
-            meta_state_dict[hf_to_meta[key]] = tensor
-        elif "model.layers." in key:
+            transformed_key = hf_to_meta[key]
+            meta_state_dict[transformed_key] = tensor
+        elif key.startswith("model.layers."):
             # Extract layer number and form a template key
             parts = key.split(".")
-            layer_num = parts[2]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
+            # e.g. "0" in "model.layers.0.input_layernorm.weight"
+            layer_num = parts[2]
             template_key = "model.layers.{layer}." + ".".join(parts[3:])
             if template_key in hf_to_meta:
-                meta_state_dict[hf_to_meta[template_key].format(layer=layer_num)] = tensor
+                transformed_key = hf_to_meta[template_key].format(layer=layer_num)
+                meta_state_dict[transformed_key] = tensor
 
     return meta_state_dict
 

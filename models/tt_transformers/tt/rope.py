@@ -11,8 +11,8 @@ from models.utility_functions import nearest_32
 from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
 
 
-def compute_gather_cos_sin(dhead, end, theta, scale_factor, orig_context_len, position_ids):
-    cos, sin = precompute_freqs(dhead, end, theta, scale_factor, orig_context_len)
+def compute_gather_cos_sin(dhead, end, theta, scale_factor, orig_context_len, position_ids, rope_type):
+    cos, sin = precompute_freqs(dhead, end, theta, scale_factor, orig_context_len, rope_type)
     return gather_cos_sin(position_ids, cos, sin)
 
 
@@ -24,8 +24,9 @@ class RotarySetup(LightweightModule):
         head_dim: int,
         max_seq_len: int,
         rope_theta: float,
-        scale_factor: float,  # use None to disable rope scaling
+        scale_factor: float | None,  # use None to disable rope scaling
         orig_context_len: int,  # only used if scaling enabled
+        rope_type: str,
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
@@ -40,6 +41,7 @@ class RotarySetup(LightweightModule):
         else:
             self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
+        self.rope_type = rope_type
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         cos_matrix, sin_matrix = compute_gather_cos_sin(
@@ -49,6 +51,7 @@ class RotarySetup(LightweightModule):
             scale_factor=scale_factor,
             orig_context_len=orig_context_len,
             position_ids=torch.arange(max_seq_len),
+            rope_type=self.rope_type,
         )
 
         self.cos_matrix = ttnn.from_torch(

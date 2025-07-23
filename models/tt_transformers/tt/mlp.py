@@ -23,6 +23,7 @@ class MLP(LightweightModule):
         self.dim = args.dim
         self.model_config = model_config
         self.layer_num = layer_num
+        self.activation_type = self.args.mlp_activation_type
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
@@ -70,9 +71,6 @@ class MLP(LightweightModule):
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
-
-        # Default activation is SILU
-        self.activation_type = self.model_config.get("mlp_activation_type", ttnn.UnaryOpType.SILU)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
