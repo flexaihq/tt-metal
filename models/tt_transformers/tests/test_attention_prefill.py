@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
+from models.tt_transformers.tests.common import precompute_freqs_cis
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, get_rot_transformation_mat
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -58,7 +58,6 @@ def test_attention_inference(
     reset_seeds,
     ensure_gc,
 ):
-    dtype = ttnn.bfloat8_b
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
 
@@ -73,34 +72,33 @@ def test_attention_inference(
     }
     reference_model = model_args.reference_attention()
     reference_model.load_state_dict(partial_state_dict)
-
+    rope_scaling = True
     # pre-compute the rotational embedding matrix and send to device
-    if model_args.sliding_window > 0 and model_args.sliding_window_pattern > 0:
+    if getattr(reference_model.attention, "is_sliding", False):
+        dtype = ttnn.bfloat16
+        logger.info("LOCAL")
+        rope_scaling = False
+        rope_theta = model_args.local_rope_theta
+        dtype = ttnn.bfloat16
         rot_mats_local = get_prefill_rot_mat(
             model_args.head_dim,
             mesh_device,
             max_seq_len,
-            model_args.local_rope_theta,
+            rope_theta,
             None,
             model_args.orig_context_len,
             rope_type="default",
         )
-        rot_mats_global = get_prefill_rot_mat(
-            model_args.head_dim,
-            mesh_device,
-            max_seq_len,
-            model_args.rope_theta,
-            model_args.rope_scaling_factor,
-            model_args.orig_context_len,
-            rope_type=model_args.rope_type,
-        )
-        rot_mats = [rot_mats_global, rot_mats_local]
+        rot_mats = rot_mats_local
     else:
+        dtype = ttnn.bfloat8_b
+        logger.info("GLOBAL")
+        rope_theta = model_args.rope_theta
         rot_mats = get_prefill_rot_mat(
             model_args.head_dim,
             mesh_device,
             max_seq_len,
-            model_args.rope_theta,
+            rope_theta,
             model_args.rope_scaling_factor,
             model_args.orig_context_len,
             rope_type=model_args.rope_type,
@@ -179,12 +177,13 @@ def test_attention_inference(
     freqs_cis_i = precompute_freqs_cis(
         model_args.head_dim,
         model_args.max_seq_len * 2,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
+        rope_theta,
+        use_scaled=rope_scaling,
+        scale_factor=model_args.rope_scaling_factor,
     )[positions]
     attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
     attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-    assert reference_model.is_sliding, "Local rope needed"
+    # assert reference_model.is_sliding, "Local rope needed"
     reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
@@ -192,9 +191,9 @@ def test_attention_inference(
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
     if passing:
-        logger.info(f"Attention Passed!")
+        logger.info("Attention Passed!")
     else:
-        logger.warning(f"Attention Failed!")
+        logger.warning("Attention Failed!")
         all_tests_pass = False
 
     check_kv_cache = True  # May want to disable: Issue #10648
@@ -254,7 +253,7 @@ def test_attention_inference(
                 logger.info(f"V cache output: {output_pcc}")
 
             if does_pass:
-                logger.info(f"KV Cache Passed!")
+                logger.info("KV Cache Passed!")
             else:
                 logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
                 all_tests_pass = False

@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
+from models.tt_transformers.tests.common import precompute_freqs_cis
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -201,7 +201,7 @@ def test_decoder_inference(
             all_tests_pass = False
 
     if all_tests_pass:
-        logger.info(f"All decode iterations Passed!")
+        logger.info("All decode iterations Passed!")
     else:
         logger.warning("One or more iterations of decode Failed!")
         assert all_tests_pass, f"PCC value is lower than {0.99} for some of the outputs. Check Warnings!"

@@ -139,7 +139,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name == "Qwen2.5-7B":
+        if base_model_name in ["Qwen2.5-7B", "gemma-3-4b-it"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
@@ -462,7 +462,7 @@ class ModelArgs:
         assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
         if LLAMA_DIR:
             if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
-                logger.warning("LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
+                logger.warning(f"LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH")
             self.CKPT_DIR = LLAMA_DIR
             self.TOKENIZER_PATH = LLAMA_DIR
             if not self.CACHE_PATH:
@@ -1419,6 +1419,7 @@ class ModelArgs:
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.sliding_window = text_config.get("sliding_window", 0)
         self.sliding_window_pattern = text_config.get("sliding_window_pattern", 0)
+        self.model_dtype = text_config.get("torch_dtype", None)
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -1613,13 +1614,15 @@ class ModelArgs:
     rope_theta={self.rope_theta},
     local_rope_theta={self.local_rope_theta},
     rope_scaling_factor={self.rope_scaling_factor},
+    model_dtype={self.model_dtype},
+    query_pre_attn_scalar={self.query_pre_attn_scalar},
     max_batch_size={self.max_batch_size},
     max_seq_len={self.max_seq_len},
     mlp_activation_type={self.mlp_activation_type},
     vision_chunk_size={self.vision_chunk_size},
     vision_max_num_chunks={self.vision_max_num_chunks},
-    vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
-    eos_token_ids={self.eos_token_ids}
+    vision_num_cross_attention_layers={self.vision_num_cross_attention_layers},
+    eos_token_ids={self.eos_token_ids},
 )"""
 
     def is_vision(self):
