@@ -2,13 +2,12 @@
 This is the patch embedding implementation for Qwen-VL-7B.
 
 The existing TtLlamaConv2dPatch from tt_transformers uses Conv2d, but Qwen needs Conv3d instead.
-Since ttnn.experimental.conv3d currently only supports Conv3d with stride (1, 1, 1)
-(see: https://github.com/tenstorrent/tt-metal/issues/24634),
-we're using PyTorch's Conv3d here instead.
+Since the stride size is the same as the kernel size for this operation, we can use a matrix
+multiplication (matmul) instead of a convolution. This is necessary because
+`ttnn.experimental.conv3d` currently only supports Conv3d with stride (1, 1, 1).
 """
 
 import ttnn
-import torch.nn.functional as F
 
 
 class TTQwen2_5_VisionPatchEmbed:
@@ -31,33 +30,27 @@ class TTQwen2_5_VisionPatchEmbed:
         super().__init__()
         self.mode = mode
         self.device = device
-
-        weight_name_1 = f"{state_dict_prefix}{weight_key}proj.weight"
-        self.weight_1 = state_dict[weight_name_1]
-
         self.patch_size = patch_size
         self.temporal_patch_size = temporal_patch_size
         self.in_channels = in_channels
         self.embed_dim = embed_dim
+        self.weight_memory_config = weight_memory_config
+        self.weight_dtype = weight_dtype
 
-        kernel_size = [temporal_patch_size, patch_size, patch_size]
+        weight_name_1 = f"{state_dict_prefix}{weight_key}proj.weight"
+        torch_weight = state_dict[weight_name_1]
 
-    def __call__(self, x):
-        x = ttnn.to_torch(
-            x,
-        )
-        weight = self.weight_1.to(dtype=x.dtype)
-        x = x.view(-1, self.in_channels, self.temporal_patch_size, self.patch_size, self.patch_size)
-        x = F.conv3d(input=x, weight=weight, stride=(2, 14, 14), padding=0, dilation=1, groups=1).view(
-            -1, self.embed_dim
-        )
-
-        x = ttnn.from_torch(
-            x,
+        weight_matrix = torch_weight.view(self.embed_dim, -1)
+        self.weight = ttnn.from_torch(
+            weight_matrix.T,
             device=self.device,
-            dtype=ttnn.bfloat16,
+            dtype=self.weight_dtype,
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.weight_memory_config,
         )
 
-        return x
+    def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x_flattened = ttnn.reshape(x, (x.shape[2], -1))
+        output = ttnn.matmul(x_flattened, self.weight)
+
+        return output
