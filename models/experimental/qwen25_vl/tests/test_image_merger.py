@@ -45,7 +45,7 @@ def test_patch_merger_inference(seq_len, batch_size, reset_seeds, device):
     state_dict = tt_model_args.load_state_dict()
 
     reference_model = tt_model_args.reference_vision_qwen_merger()  # Qwen Patch merger
-    first_layer_prefix = "visual.merger."
+    first_layer_prefix = "model.visual.merger."
 
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
@@ -57,7 +57,7 @@ def test_patch_merger_inference(seq_len, batch_size, reset_seeds, device):
         device=device,
         dim=5120,
         state_dict=state_dict,
-        weight_key="visual.merger.",
+        weight_key=first_layer_prefix,
         layer_num=None,
         state_dict_prefix="",
         weight_cache_path=None,

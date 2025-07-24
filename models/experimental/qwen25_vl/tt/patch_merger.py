@@ -76,7 +76,7 @@ class TTQwen2_5_VLPatchMerger:
             dim=1280,
             state_dict=state_dict,
             state_dict_prefix="",
-            weight_key="visual.merger.ln_q",
+            weight_key="model.visual.merger.ln_q",
             weight_dtype=ttnn.bfloat16,
             is_distributed=False,
             sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],

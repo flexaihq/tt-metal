@@ -51,7 +51,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     state_dict = tt_model_args.load_state_dict()
 
     reference_model = tt_model_args.reference_vision_rms_norm()  # Qwen2_5 RMSNorm
-    first_layer_prefix = "visual.blocks.0.norm1."
+    first_layer_prefix = "model.visual.blocks.0.norm1."
 
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
@@ -64,7 +64,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
         dim=dim,
         state_dict=state_dict,
         state_dict_prefix="",
-        weight_key="visual.blocks.0.norm1",
+        weight_key=first_layer_prefix[:-1],  # Remove trailing dot
         weight_dtype=dtype,
         is_distributed=False,
         sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],

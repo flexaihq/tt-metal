@@ -79,17 +79,8 @@ def process_real_vision_inputs(messages, model_args):
     """Process real image inputs using AutoProcessor (Interface Segregation)."""
     processor = AutoProcessor.from_pretrained(os.getenv("HF_MODEL"))
 
-    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-    from qwen_vl_utils import process_vision_info
-
-    image_inputs, video_inputs = process_vision_info(messages)
-    encoded = processor(
-        text=[text],
-        images=image_inputs,
-        videos=video_inputs,
-        # padding=True,
-        return_tensors="pt",
+    encoded = processor.apply_chat_template(
+        messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
     ).to("cpu", dtype=torch.bfloat16)
 
     input_ids = encoded["input_ids"]
@@ -112,7 +103,7 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
     """Load separate vision and text models following test_end2end.py pattern."""
     state_dict = model_args.load_state_dict()
 
-    vision_prefix = "visual."
+    vision_prefix = "model.visual."
 
     # Setup paged attention config (exactly like test_end2end.py)
     paged_attention_config = None

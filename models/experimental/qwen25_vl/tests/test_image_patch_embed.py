@@ -45,7 +45,7 @@ def test_embed_inference(seq_len, batch_size, reset_seeds, device):
     state_dict = tt_model_args.load_state_dict()
 
     reference_model = tt_model_args.reference_vision_qwen_patch_embed()  # Qwen Patch embed
-    first_layer_prefix = "visual.patch_embed."
+    first_layer_prefix = "model.visual.patch_embed."
 
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
@@ -60,7 +60,7 @@ def test_embed_inference(seq_len, batch_size, reset_seeds, device):
         in_channels=3,
         embed_dim=1280,
         state_dict=state_dict,
-        weight_key="visual.patch_embed.",
+        weight_key=first_layer_prefix,
         layer_num=None,
         state_dict_prefix="",
         weight_cache_path=None,
@@ -69,7 +69,7 @@ def test_embed_inference(seq_len, batch_size, reset_seeds, device):
         mode=mode,
     )
 
-    input = torch.rand(1, 3, 2, 14, 14)
+    input = torch.rand(1, 1, 1380, 1176)
     reference_output = reference_model(input)
 
     tt_input = ttnn.from_torch(
