@@ -13,7 +13,7 @@ from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding
 from models.tt_transformers.tt.lm_head import LMHead
-from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.model_config import AttentionType, TensorGroup
 from models.tt_transformers.tt.rope import RotarySetup
 
 
@@ -58,16 +58,19 @@ class Transformer(LightweightModule):
             args.rope_type,
         )
 
-        self.rope_setup_local = RotarySetup(
-            mesh_device,
-            args.max_batch_size,
-            args.head_dim,
-            args.max_seq_len,
-            args.local_rope_theta,
-            None,
-            args.orig_context_len,
-            "default",
-        )
+        if AttentionType.SLIDING in args.attention_types:
+            self.rope_setup_local = RotarySetup(
+                mesh_device,
+                args.max_batch_size,
+                args.head_dim,
+                args.max_seq_len,
+                args.local_rope_theta,
+                None,
+                args.orig_context_len,
+                "default",
+            )
+        else:
+            self.rope_setup_local = None
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -143,10 +146,13 @@ class Transformer(LightweightModule):
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
 
-        tt_rot_mats_prefill_local = [
-            self.rope_setup_local.cos_matrix[:, :, start_pos : start_pos + S, :],
-            self.rope_setup_local.sin_matrix[:, :, start_pos : start_pos + S, :],
-        ]
+        if self.rope_setup_local:
+            tt_rot_mats_prefill_local = [
+                self.rope_setup_local.cos_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_setup_local.sin_matrix[:, :, start_pos : start_pos + S, :],
+            ]
+        else:
+            tt_rot_mats_prefill_local = None
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(

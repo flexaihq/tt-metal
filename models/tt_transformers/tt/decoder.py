@@ -45,13 +45,7 @@ class TransformerBlock(LightweightModule):
 
         self.layer_num = layer_num
 
-        attention_type = AttentionType.FULL
-        if args.sliding_window and args.sliding_window > 0 and args.sliding_window_pattern > 0:
-            if (layer_num + 1) % args.sliding_window_pattern != 0:
-                attention_type = AttentionType.LOCAL_SLIDING
-            else:
-                attention_type = AttentionType.GLOBAL
-
+        attention_type = args.attention_types[layer_num % len(args.attention_types)]
         logger.info(f"attention type: {attention_type}")
 
         self.attention = Attention(
@@ -203,12 +197,10 @@ class TransformerBlock(LightweightModule):
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
 
-        if self.attention.attention_type == AttentionType.LOCAL_SLIDING:
+        if self.attention.attention_type == AttentionType.SLIDING:
             position_embeddings = rot_mats[1]  # uses local
-        elif self.attention.attention_type == AttentionType.GLOBAL:
+        elif self.attention.attention_type == AttentionType.FULL:
             position_embeddings = rot_mats[0]  # uses global
-        else:
-            position_embeddings = rot_mats
 
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(

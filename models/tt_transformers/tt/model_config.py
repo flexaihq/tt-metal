@@ -77,6 +77,24 @@ class MathFidelitySetting(Enum):
     HIFI4 = "hifi4"
 
 
+class AttentionType(Enum):
+    FULL = "full"
+    SLIDING = "sliding"
+
+    @staticmethod
+    def from_str(attention_types: list[str]):
+        types = []
+        for attention_type in attention_types:
+            match attention_type:
+                case "full_attention":
+                    types.append(AttentionType.FULL)
+                case "sliding_attention":
+                    types.append(AttentionType.SLIDING)
+                case _:
+                    raise ValueError(f"unknown attention_type {attention_type}")
+        return types
+
+
 class ModelOptimizations:
     @classmethod
     def accuracy(cls, model_name):
@@ -442,7 +460,7 @@ class ModelArgs:
         self.use_pre_ffn: bool = False
         self.use_post_ffn: bool = False
         self.sliding_window: int = 0
-        self.sliding_window_pattern: int = 0
+        self.attention_types = [AttentionType.FULL]
         self.mlp_activation_type = ttnn.UnaryOpType.SILU
         self.from_hf_url: bool = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
@@ -451,9 +469,9 @@ class ModelArgs:
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
         self.is_multimodal = False
 
-        assert not os.getenv("FAKE_DEVICE"), (
-            "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
-        )
+        assert not os.getenv(
+            "FAKE_DEVICE"
+        ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
 
         # Remove trailing slashes so basename gets the right model name
         LLAMA_DIR = os.getenv("LLAMA_DIR")
@@ -480,9 +498,9 @@ class ModelArgs:
             ]  # HF model names use / even on windows. May be overridden by config.
             self.from_hf_url = True
         else:
-            assert False, (
-                "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
-            )
+            assert (
+                False
+            ), "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
 
         if "gemma-3" in self.model_name.lower():
             self.use_post_ffn = True
@@ -491,9 +509,9 @@ class ModelArgs:
 
         if not dummy_weights and not HF_MODEL:
             # Assert if all folders and files exist
-            assert os.path.exists(self.CKPT_DIR), (
-                f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
-            )
+            assert os.path.exists(
+                self.CKPT_DIR
+            ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
             os.makedirs(self.CACHE_PATH, exist_ok=True)
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
@@ -577,9 +595,9 @@ class ModelArgs:
                     f"Try setting MAX_PREFILL_CHUNK_SIZE to larger powers of 2 up to e.g. 128 for faster performance (if you run out of L1 memory it was too high)"
                 )
                 max_prefill_chunk_size_div1024 = 4
-            assert max_prefill_chunk_size_div1024 is not None, (
-                f"Unsupported model {self.model_name} on device {self.device_name}"
-            )
+            assert (
+                max_prefill_chunk_size_div1024 is not None
+            ), f"Unsupported model {self.model_name} on device {self.device_name}"
         else:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
@@ -700,9 +718,9 @@ class ModelArgs:
             )
 
             # nlp_concat_heads_decode will shard the data across this number of cores
-            assert self.n_heads % self.cluster_shape[1] == 0, (
-                f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
-            )
+            assert (
+                self.n_heads % self.cluster_shape[1] == 0
+            ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
             # Note: for some models (e.g. Mistral-Small) n_heads * head_dim != dim
             self.model_config["ATTN_OUTPUT_PROGCFG"] = (
@@ -847,9 +865,9 @@ class ModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, (
-                f"n_kv_heads ({self.n_kv_heads}) must be divisible by num_devices ({self.cluster_shape[1]})"
-            )
+            assert (
+                self.n_kv_heads % self.cluster_shape[1] == 0
+            ), f"n_kv_heads ({self.n_kv_heads}) must be divisible by num_devices ({self.cluster_shape[1]})"
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.MAX_QKV_MM_SEQ_LEN = 2048
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -903,14 +921,14 @@ class ModelArgs:
                 packer_l1_acc=False,
             )
 
-            self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"] = (
-                lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
-                    shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),  # self.n_heads padded to tile size
-                    core_grid=ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
-                    strategy=ttnn.ShardStrategy.HEIGHT,
-                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
+            self.model_config[
+                "SCORES_BATCHED_MM_OUTPUT_MEMCFG"
+            ] = lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
+                shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),  # self.n_heads padded to tile size
+                core_grid=ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
             )
 
             # MLP configs
@@ -1418,7 +1436,7 @@ class ModelArgs:
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.sliding_window = text_config.get("sliding_window", 0)
-        self.sliding_window_pattern = text_config.get("sliding_window_pattern", 0)
+        self.attention_types = AttentionType.from_str(text_config.get("layer_types", ["full"]))
         self.model_dtype = text_config.get("torch_dtype", None)
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
@@ -1523,6 +1541,7 @@ class ModelArgs:
 
         self.state_dict_text_prefix = self._get_text_prefix()
 
+        logger.info(f"CONFIG: {config}, ARGS: {self}")
         self._set_model_specific_params()
 
     @property
@@ -1736,9 +1755,9 @@ class ModelArgs:
         )  # TODO: Needed for TG hang workaround
 
         if in0_block_w is None:
-            assert k % (self.tile_size * grid_size[1]) == 0, (
-                f"Input width must be divisible by tile size times grid size"
-            )
+            assert (
+                k % (self.tile_size * grid_size[1]) == 0
+            ), f"Input width must be divisible by tile size times grid size"
             in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
@@ -1817,12 +1836,12 @@ class ModelArgs:
                 rows = i
                 break
 
-        assert cols is not None, (
-            f"Cannot find a number of columns that evenly divides into {col_tiles} tiles, not even 1(!)."
-        )
-        assert rows is not None, (
-            f"Cannot find a number of rows that evenly divides into {row_tiles} tiles, not even 1(!)."
-        )
+        assert (
+            cols is not None
+        ), f"Cannot find a number of columns that evenly divides into {col_tiles} tiles, not even 1(!)."
+        assert (
+            rows is not None
+        ), f"Cannot find a number of rows that evenly divides into {row_tiles} tiles, not even 1(!)."
         return rows, cols
 
     def dram_shard_core_grid_for_k_and_n(self, k: int, n: int) -> Tuple[int, int]:
@@ -1876,9 +1895,9 @@ class ModelArgs:
         if num_cores is None:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
             num_cores = self.dram_shard_core_grid_for_k_and_n(k, n).num_cores
-            assert k % (self.tile_size * num_cores) == 0, (
-                f"k must be divisible by tile_size * num_cores: {k} % {self.tile_size * num_cores} != 0"
-            )
+            assert (
+                k % (self.tile_size * num_cores) == 0
+            ), f"k must be divisible by tile_size * num_cores: {k} % {self.tile_size * num_cores} != 0"
             # assert n % (self.tile_size * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {self.tile_size * num_cores} != 0"
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=self.find_largest_divisor(k // (self.tile_size * num_cores)),

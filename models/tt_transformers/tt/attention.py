@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-from enum import Enum, auto
 
 import torch
 
@@ -11,13 +10,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
-from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
-
-
-class AttentionType(Enum):
-    FULL = auto()
-    GLOBAL = auto()
-    LOCAL_SLIDING = auto()
+from models.tt_transformers.tt.model_config import AttentionType, OpGroup, TensorGroup
 
 
 class Attention(LightweightModule):

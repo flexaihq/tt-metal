@@ -18,8 +18,8 @@ def _get_known_prefixes_mapping():
         "text_model.": "",
         "vision_model.": "",
         # Gemma3
-        "language_model.model.": "model.",
-        "vision_tower.model.": "model.",
+        "model.language_model.": "model.",
+        "model.vision_tower.": "model.",
     }
 
 
