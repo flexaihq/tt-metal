@@ -34,5 +34,7 @@ class Embedding(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.embedding(
+            x, self.weights, layout=ttnn.TILE_LAYOUT, padding_idx=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         return x

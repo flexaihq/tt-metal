@@ -59,16 +59,12 @@ class Gemma3Transformer(LightweightModule):
             args.orig_context_len,
         )
 
-        # Gemma3-1B uses different rope configurations for sliding vs global attention
-        # Keep original rope_scaling_factor for global attention, None for local sliding window
-        args.rope_scaling_factor = None  # Set to None for local rope setup
-
         self.rope_setup_local = RotarySetup(
             mesh_device,
             args.max_batch_size,
             args.head_dim,
             args.max_seq_len,
-            args.rope_theta,
+            10000,
             None,
             args.orig_context_len,
         )
