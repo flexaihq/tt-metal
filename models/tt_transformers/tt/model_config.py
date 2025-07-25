@@ -569,7 +569,8 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "gemma-3-4b": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-4b-it": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-12b-it": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -582,8 +583,6 @@ class ModelArgs:
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
-                "gemma-3-4b-it": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "gemma-3-12b-it": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -1647,6 +1646,9 @@ class ModelArgs:
     def is_vision(self):
         return self.vision_chunk_size > 0
 
+    def is_sliding_attention(self, layer_num: int):
+        return self.attention_types[layer_num % len(self.attention_types)]
+
     def get_state_dict_prefix(self, module_name, layer_num):
         text_prefix = self.state_dict_text_prefix
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
@@ -2184,21 +2186,18 @@ class ModelArgs:
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                    # HACK: Assume that we want the language model layers only
-                    if hasattr(model, "language_model"):
-                        model = model.language_model
-                        logger.info(f"MODEL IS NOW\n{model.model}")
                     self.cached_hf_model = model
                 elif self.cache_hf_flag and self.cached_hf_model is not None:
                     model = self.cached_hf_model
                 else:
                     # No caching - load fresh each time
                     model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                    # HACK: Assume that we want the language model layers only
-                    if hasattr(model, "language_model"):
-                        model.model = model.language_model.model
-                        logger.info(f"MODEL IS NOW\n{model.model}")
-                        # We keep language_model because transformers don't let us change or delete it
+
+                # HACK: Assume that we want the language model layers only
+                if hasattr(model, "language_model"):
+                    model.model = model.language_model
+                    # We keep language_model because transformers don't let us change or delete it
+                logger.info(f"MODEL IS NOW\n{model.model}")
                 model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
@@ -2266,8 +2265,12 @@ class ModelArgs:
             return Attention(self)
         else:
             model = self.reference_transformer(wrap=False)
-            layer = model.model.layers[0].self_attn
-            rotary_emb = getattr(model.model, "rotary_emb", None)
+            layer_num = 0
+            layer = model.model.layers[layer_num].self_attn
+            if layer.is_sliding:
+                rotary_emb = getattr(model.model, "rotary_emb_local", None)
+            else:
+                rotary_emb = getattr(model.model, "rotary_emb", None)
             wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb)
             return wrapper
 
@@ -2443,7 +2446,7 @@ class HfDecoderWrapper:
         if self.rotary_emb_local:
             result = self.decoder.forward(
                 x,
-                position_embeddings=position_embeddings,
+                position_embeddings_global=position_embeddings,
                 position_embeddings_local=position_embeddings_local,
                 past_key_value=self.past_key_values,
                 use_cache=True,

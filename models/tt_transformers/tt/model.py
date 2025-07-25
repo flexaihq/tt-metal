@@ -57,6 +57,7 @@ class Transformer(LightweightModule):
             args.orig_context_len,
             args.rope_type,
         )
+        self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
         if AttentionType.SLIDING in args.attention_types:
             self.rope_setup_local = RotarySetup(
@@ -69,10 +70,9 @@ class Transformer(LightweightModule):
                 args.orig_context_len,
                 "default",
             )
+            self.trans_mats_dict_local = self.rope_setup_local.get_both_trans_mats()
         else:
             self.rope_setup_local = None
-
-        self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
         self.layers = [
             TransformerBlock(
@@ -82,7 +82,9 @@ class Transformer(LightweightModule):
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
                 layer_num=i,
-                transformation_mats=self.trans_mats_dict,
+                transformation_mats=self.trans_mats_dict_local
+                if args.is_sliding_attention(i)
+                else self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
             )
@@ -213,6 +215,7 @@ class Transformer(LightweightModule):
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
         rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
+        rope_idxs_local = self.rope_setup_local.get_rot_idxs(rot_current_pos, on_host=True)
         current_pos_tt = ttnn.from_torch(
             current_pos,
             device=None,
@@ -248,7 +251,10 @@ class Transformer(LightweightModule):
         Embed tokens
         """
         tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
-        tt_rot_mats_local = self.rope_setup_local.get_rot_mats(rope_idxs)
+        if self.rope_setup_local:
+            tt_rot_mats_local = self.rope_setup_local.get_rot_mats(rope_idxs)
+        else:
+            tt_rot_mats_local = None
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         tt_tokens = ttnn.to_memory_config(

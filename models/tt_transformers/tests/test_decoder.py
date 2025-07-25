@@ -76,6 +76,7 @@ def test_decoder_inference(
     generation_start_pos = 0
     generation_length = 10
     all_tests_pass = True
+    layer_num = 0
 
     # Setup RoPE transformation matrices
     rope_setup = RotarySetup(
@@ -88,7 +89,20 @@ def test_decoder_inference(
         model_args.orig_context_len,
         rope_type=model_args.rope_type,
     )
-    transformation_mats = rope_setup.get_both_trans_mats()
+    if model_args.is_sliding_attention(layer_num):
+        local_rope_setup = RotarySetup(
+            mesh_device,
+            model_args.max_batch_size,
+            model_args.head_dim,
+            model_args.max_seq_len,
+            model_args.local_rope_theta,
+            None,
+            model_args.orig_context_len,
+            rope_type="default",
+        )
+        transformation_mats = local_rope_setup.get_both_trans_mats()
+    else:
+        transformation_mats = rope_setup.get_both_trans_mats()
 
     # Prepare page table for paged attention
     page_table_tt = None
@@ -124,7 +138,7 @@ def test_decoder_inference(
         mesh_device=mesh_device,
         dtype=dtype,
         state_dict=state_dict,
-        layer_num=0,
+        layer_num=layer_num,
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
@@ -157,7 +171,7 @@ def test_decoder_inference(
         logger.info(f"[Decoder] Generating token {i}")
 
         # input = torch.randn(1, 32, 4096)
-        pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
+        pt_decode_input = ((torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1).bfloat16()
         tt_decode_input = pt_decode_input.clone()
 
         decode_input = model_args.prepare_residual_tensor_decode(
@@ -167,7 +181,9 @@ def test_decoder_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rot_mats(current_pos)
+        rot_mats = [rope_setup.get_rot_mats(current_pos)]
+        if model_args.is_sliding_attention(layer_num):
+            rot_mats.append(local_rope_setup.get_rot_mats(current_pos))
 
         # Run TT model
         tt_out = tt_model(

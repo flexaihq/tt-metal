@@ -46,7 +46,7 @@ class TransformerBlock(LightweightModule):
         self.layer_num = layer_num
 
         attention_type = args.attention_types[layer_num % len(args.attention_types)]
-        logger.info(f"attention type: {attention_type}")
+        logger.debug(f"attention type: {attention_type}")
 
         self.attention = Attention(
             mesh_device=mesh_device,
@@ -214,6 +214,7 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        attn_in.deallocate(True)
 
         if not (self.pre_ffn_norm and self.post_ffn_norm):
             """
@@ -270,9 +271,10 @@ class TransformerBlock(LightweightModule):
                 x,
                 post_attn_out,
                 memory_config=skip_mem_cfg,
-                dtype=ttnn.bfloat16 if TG else None,
+                dtype=self.args.ccl_dtype,
             )
             x.deallocate(True)
+            post_attn_out.deallocate(True)
 
             # Norms take fractured inputs and output replicated across devices
             if TG and mode == "decode":
@@ -297,4 +299,6 @@ class TransformerBlock(LightweightModule):
                 if TG and not self.args.is_distributed_norm(mode)
                 else activation_dtype or ttnn.bfloat16,
             )
+            add_out.deallocate(True)
+            post_ffn_out.deallocate(True)
         return out  # fractured across devices

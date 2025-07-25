@@ -80,18 +80,32 @@ def test_attention_inference(
     generation_start_pos = 0
     generation_length = 10
     all_tests_pass = True
+    layer_num = 0
 
-    # Setup RoPE transformation matrices
-    rope_setup = RotarySetup(
-        mesh_device,
-        batch_size,
-        model_args.head_dim,
-        model_args.max_seq_len,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
-        model_args.rope_type,
-    )
+    if model_args.is_sliding_attention(layer_num):
+        # Setup RoPE transformation matrices
+        rope_setup = RotarySetup(
+            mesh_device,
+            batch_size,
+            model_args.head_dim,
+            model_args.max_seq_len,
+            model_args.local_rope_theta,
+            None,
+            model_args.orig_context_len,
+            "default",
+        )
+    else:
+        # Setup RoPE transformation matrices
+        rope_setup = RotarySetup(
+            mesh_device,
+            batch_size,
+            model_args.head_dim,
+            model_args.max_seq_len,
+            model_args.rope_theta,
+            model_args.rope_scaling_factor,
+            model_args.orig_context_len,
+            model_args.rope_type,
+        )
 
     transformation_mats = rope_setup.get_both_trans_mats()
 
@@ -127,21 +141,31 @@ def test_attention_inference(
         mesh_device,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
+        layer_num=layer_num,
         dtype=dtype,
         transformation_mats=transformation_mats,
         configuration=model_args,
         paged_attention_config=paged_attention_config,
     )
 
-    cos, sin = precompute_freqs(
-        model_args.head_dim,
-        model_args.max_seq_len * 2,
-        model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
-        model_args.rope_type,
-    )
+    if model_args.is_sliding_attention(layer_num):
+        cos, sin = precompute_freqs(
+            model_args.head_dim,
+            model_args.max_seq_len * 2,
+            model_args.local_rope_theta,
+            None,
+            model_args.orig_context_len,
+            "default",
+        )
+    else:
+        cos, sin = precompute_freqs(
+            model_args.head_dim,
+            model_args.max_seq_len * 2,
+            model_args.rope_theta,
+            model_args.rope_scaling_factor,
+            model_args.orig_context_len,
+            model_args.rope_type,
+        )
     freqs_cis = torch.complex(cos, sin)
 
     # Initial positions
@@ -159,7 +183,7 @@ def test_attention_inference(
 
     for i in range(generation_length):
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
-        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim)  # Qwen2.5 0.5B sees 0.1 to 2.1
+        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim).bfloat16()  # Qwen2.5 0.5B sees 0.1 to 2.1
 
         tt_attention_input = pt_attention_input.clone()
 

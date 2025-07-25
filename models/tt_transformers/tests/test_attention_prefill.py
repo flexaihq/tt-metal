@@ -58,12 +58,14 @@ def test_attention_inference(
     reset_seeds,
     ensure_gc,
 ):
+    dtype = ttnn.bfloat16
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
+    layer_num = 0
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("Attention", 0) + "."
@@ -74,13 +76,12 @@ def test_attention_inference(
     reference_model.load_state_dict(partial_state_dict)
     rope_scaling = True
     # pre-compute the rotational embedding matrix and send to device
-    if getattr(reference_model.attention, "is_sliding", False):
-        dtype = ttnn.bfloat16
+    if model_args.is_sliding_attention(layer_num):
         logger.info("LOCAL")
         rope_scaling = False
         rope_theta = model_args.local_rope_theta
         dtype = ttnn.bfloat16
-        rot_mats_local = get_prefill_rot_mat(
+        rot_mats = get_prefill_rot_mat(
             model_args.head_dim,
             mesh_device,
             max_seq_len,
@@ -89,9 +90,7 @@ def test_attention_inference(
             model_args.orig_context_len,
             rope_type="default",
         )
-        rot_mats = rot_mats_local
     else:
-        dtype = ttnn.bfloat8_b
         logger.info("GLOBAL")
         rope_theta = model_args.rope_theta
         rot_mats = get_prefill_rot_mat(
@@ -147,7 +146,7 @@ def test_attention_inference(
         mesh_device,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
+        layer_num=layer_num,
         dtype=dtype,
         transformation_mats=transformation_mats,
         configuration=model_args,
@@ -155,6 +154,8 @@ def test_attention_inference(
     )
 
     pt_attention_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
+    pt_attention_input = pt_attention_input.bfloat16()
+    logger.info(f"INPUT is {pt_attention_input.type()}")
     tt_attention_input = pt_attention_input.clone()
     attention_input = model_args.prepare_residual_tensor_prefill(
         tt_attention_input,
@@ -184,6 +185,7 @@ def test_attention_inference(
     attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
     attn_mask_torch = torch.triu(attn_mask, diagonal=1)
     # assert reference_model.is_sliding, "Local rope needed"
+
     reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)

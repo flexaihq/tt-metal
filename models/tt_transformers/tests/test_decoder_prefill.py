@@ -82,19 +82,12 @@ def test_decoder_inference(
     generation_start_pos = 0
     generation_length = 1
     all_tests_pass = True
+    layer_num = 0
 
     # pre-compute the rotational embedding matrix and send to device
-    if model_args.sliding_window > 0 and model_args.sliding_window_pattern > 0:
-        rot_mats_local = get_prefill_rot_mat(
-            model_args.head_dim,
-            mesh_device,
-            max_seq_len,
-            model_args.local_rope_theta,
-            None,
-            model_args.orig_context_len,
-            rope_type="default",
-        )
-        rot_mats_global = get_prefill_rot_mat(
+    rot_mats = []
+    rot_mats.append(
+        get_prefill_rot_mat(
             model_args.head_dim,
             mesh_device,
             max_seq_len,
@@ -103,18 +96,21 @@ def test_decoder_inference(
             model_args.orig_context_len,
             rope_type=model_args.rope_type,
         )
-        rot_mats = [rot_mats_global, rot_mats_local]
-        logger.info("HERE")
-    else:
-        rot_mats = get_prefill_rot_mat(
-            model_args.head_dim,
-            mesh_device,
-            max_seq_len,
-            model_args.rope_theta,
-            model_args.rope_scaling_factor,
-            model_args.orig_context_len,
-            rope_type=model_args.rope_type,
+    )
+
+    if model_args.is_sliding_attention(layer_num):
+        rot_mats.append(
+            get_prefill_rot_mat(
+                model_args.head_dim,
+                mesh_device,
+                max_seq_len,
+                model_args.local_rope_theta,
+                None,
+                model_args.orig_context_len,
+                rope_type="default",
+            )
         )
+
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
@@ -155,7 +151,7 @@ def test_decoder_inference(
         mesh_device=mesh_device,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
-        layer_num=0,
+        layer_num=layer_num,
         dtype=dtype,
         transformation_mats=transformation_mats,
         args=model_args,
@@ -164,17 +160,24 @@ def test_decoder_inference(
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
-        pt_decode_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
+        pt_decode_input = ((torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1).bfloat16()
         tt_decode_input = pt_decode_input.clone()
         decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
         )
         positions = torch.LongTensor(range(max_seq_len))
+        if model_args.is_sliding_attention(layer_num):
+            rope_theta = model_args.local_rope_theta
+            scaling_factor = None
+        else:
+            rope_theta = model_args.rope_theta
+            scaling_factor = model_args.rope_scaling_factor
+
         freqs_cis_i = precompute_freqs_cis(
             model_args.head_dim,
             model_args.max_seq_len * 2,
-            model_args.rope_theta,
-            model_args.rope_scaling_factor,
+            rope_theta,
+            scaling_factor,
         )[positions]
 
         # Reference model
