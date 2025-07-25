@@ -87,6 +87,13 @@ class TTQwen2_5_VLPatchMerger:
 
         self.weight_2 = ttnn.transpose(self.weight_2, 0, 1)
 
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            dst_full_sync_en=False,
+        )
+
     def __call__(self, x):
         x = self.ln_q(x, mode=self.mode)
 
@@ -96,6 +103,7 @@ class TTQwen2_5_VLPatchMerger:
             x,
             self.weight_2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
         )
         x = ttnn.gelu(x)
 
@@ -103,6 +111,7 @@ class TTQwen2_5_VLPatchMerger:
             x,
             self.weight_3,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
         )
 
         return x

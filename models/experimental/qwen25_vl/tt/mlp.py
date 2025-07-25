@@ -64,6 +64,13 @@ class QwenTTVisionMLP(LightweightModule):
         self.w2 = as_tensor("down_proj", dtype)
         self.b2 = as_tensor("down_proj", ttnn.bfloat16, is_bias=True)
 
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            dst_full_sync_en=False,
+        )
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Qwen HF MLP reference:
@@ -76,16 +83,36 @@ class QwenTTVisionMLP(LightweightModule):
 
         # Linear with GELU activation
         w1_out = ttnn.linear(
-            x, self.w1, bias=self.b1, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, activation="silu"
+            x,
+            self.w1,
+            bias=self.b1,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            activation="silu",
+            compute_kernel_config=self.compute_kernel_config,
         )
 
-        w3_out = ttnn.linear(x, self.w3, bias=self.b3, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        w3_out = ttnn.linear(
+            x,
+            self.w3,
+            bias=self.b3,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
 
         # Element-wise multiply
         w2_in = ttnn.mul(w1_out, w3_out, dtype=ttnn.bfloat16)
 
         # Final projection
-        w2_out = ttnn.linear(w2_in, self.w2, bias=self.b2, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        w2_out = ttnn.linear(
+            w2_in,
+            self.w2,
+            bias=self.b2,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
 
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)

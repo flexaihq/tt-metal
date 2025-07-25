@@ -48,9 +48,15 @@ class TTQwen2_5_VisionPatchEmbed:
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.weight_memory_config,
         )
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            dst_full_sync_en=False,
+        )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x_flattened = ttnn.reshape(x, (x.shape[2], -1))
-        output = ttnn.matmul(x_flattened, self.weight)
+        output = ttnn.matmul(x_flattened, self.weight, compute_kernel_config=self.compute_kernel_config)
 
         return output

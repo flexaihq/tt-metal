@@ -70,6 +70,13 @@ class TtQwen2_5_VLVisionSdpaAttention(LightweightModule):
             proj_bias, device=mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            dst_full_sync_en=False,
+        )
+
     def forward(self, hidden_states, cu_seqlens, position_embeddings):
         """
         hidden_states: ttnn.Tensor of shape [batch, seq_len, hidden_size]
@@ -79,7 +86,12 @@ class TtQwen2_5_VLVisionSdpaAttention(LightweightModule):
         cos, sin = position_embeddings
         # Fused qkv projection
         qkv = ttnn.linear(
-            hidden_states, self.qkv_weight, bias=self.qkv_bias, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            hidden_states,
+            self.qkv_weight,
+            bias=self.qkv_bias,
+            dtype=self.dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
         )  # shape [batch, seq_len, hidden_size*3]
 
         (q, k, v) = ttnn.permute(ttnn.reshape(qkv, [seq_len, 3, self.num_heads, -1]), [1, 0, 2, 3])
@@ -116,7 +128,12 @@ class TtQwen2_5_VLVisionSdpaAttention(LightweightModule):
 
         # Final projection
         output = ttnn.linear(
-            attn_output, self.proj_weight, bias=self.proj_bias, dtype=self.dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            attn_output,
+            self.proj_weight,
+            bias=self.proj_bias,
+            dtype=self.dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
         )
 
         ttnn.deallocate(attn_output)

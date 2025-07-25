@@ -66,7 +66,7 @@ def setup_vision_prompts_and_tokenizer(model_args, instruct):
                     "type": "image",
                     "image": "https://raw.githubusercontent.com/yavuzceliker/sample-images/refs/heads/main/images/image-1.jpg",
                 },
-                {"type": "text", "text": "Describe this image."},
+                {"type": "text", "text": "Describe this image in detail in 1000 words."},
             ],
         }
     ]
@@ -226,6 +226,10 @@ def run_generation_exactly_like_test_end2end(
 
         all_outputs[0].append(token_id)
         current_pos += 1
+
+        if token_id == 151645 or token_id == 151643:
+            logger.warning("Reached End token")
+            break
 
         # Early stopping (exactly like test_end2end.py)
         if len(all_outputs[0]) >= 5 and all(t == all_outputs[0][-1] for t in all_outputs[0][-5:]):
