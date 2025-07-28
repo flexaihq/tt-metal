@@ -193,7 +193,7 @@ def run_generation_exactly_like_test_end2end(
 
     current_pos = torch.tensor([decoding_pos[0]])
     out_tok = prefilled_token
-    generation_length = 200
+    generation_length = 2000
 
     results = []
 
@@ -300,7 +300,7 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (1024,),  # Use smaller seq_len like test_end2end.py to avoid memory issues
+    (2048,),  # Use smaller seq_len like test_end2end.py to avoid memory issues
 )
 @pytest.mark.parametrize(
     "optimizations",

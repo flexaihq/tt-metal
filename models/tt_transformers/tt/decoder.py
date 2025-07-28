@@ -39,6 +39,7 @@ class TransformerBlock(LightweightModule):
         self.n_kv_heads = args.n_kv_heads
         self.current = 0
         self.model_config = args.get_model_config()
+        self.simplified_rms = True if self.args.base_model_name == "Qwen2.5-VL-7B" else False
 
         self.layer_num = layer_num
 
@@ -88,6 +89,7 @@ class TransformerBlock(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                simplified_rms=self.simplified_rms,
             ),
             args,
             TG=args.is_galaxy,
@@ -107,6 +109,7 @@ class TransformerBlock(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                simplified_rms=self.simplified_rms,
             ),
             args,
             TG=args.is_galaxy,
