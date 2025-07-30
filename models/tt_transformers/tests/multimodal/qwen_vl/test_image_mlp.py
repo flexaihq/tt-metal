@@ -8,8 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.experimental.qwen25_vl.tt.mlp import QwenTTVisionMLP
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_image_mlp import QwenTTVisionMLP
 from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
 
 

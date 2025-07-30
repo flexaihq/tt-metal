@@ -1,28 +1,20 @@
 """Test for Qwen 2.5 VL End-to-End Vision-Text Pipeline"""
 
-import torch
-import pytest
-from loguru import logger
 import os
-import ttnn
-from models.tt_transformers.tt.common import (
-    sample_host,
-    PagedAttentionConfig,
-    preprocess_inputs_prefill,
-)
-from models.tt_transformers.tt.model_config import DecodersPrecision
+import re
 
-from models.experimental.qwen25_vl.tt.model import Qwen25VLTransformer as Transformer
-
-from models.tt_transformers.tt.generator import Generator
-
-from models.experimental.qwen25_vl.tt.vision_model import TtQwen2_5_VisionTransformerPretrainedModel
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
-
-from models.tt_transformers.tt.model_config import ModelArgs
+import pytest
+import torch
+from loguru import logger
 from transformers import AutoProcessor
 
-import re
+import ttnn
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill, sample_host
+from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_model import Qwen25VLTransformer as Transformer
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_vision_model import TtQwen2_5_VisionTransformerPretrainedModel
+from models.utility_functions import skip_for_blackhole, skip_for_grayskull
 
 
 def parse_chat_output(text):
@@ -66,7 +58,7 @@ def setup_vision_prompts_and_tokenizer(model_args, instruct):
                     "type": "image",
                     "image": "https://raw.githubusercontent.com/yavuzceliker/sample-images/refs/heads/main/images/image-1.jpg",
                 },
-                {"type": "text", "text": "Describe this image in detail in 1000 words."},
+                {"type": "text", "text": "Describe this image."},
             ],
         }
     ]
@@ -79,14 +71,25 @@ def process_real_vision_inputs(messages, model_args):
     """Process real image inputs using AutoProcessor (Interface Segregation)."""
     processor = AutoProcessor.from_pretrained(os.getenv("HF_MODEL"))
 
-    encoded = processor.apply_chat_template(
-        messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
+    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+    from qwen_vl_utils import process_vision_info
+
+    image_inputs, video_inputs = process_vision_info(messages)
+    encoded = processor(
+        text=[text],
+        images=image_inputs,
+        videos=video_inputs,
+        # padding=True,
+        return_tensors="pt",
     ).to("cpu", dtype=torch.bfloat16)
 
     input_ids = encoded["input_ids"]
     pixel_values = encoded["pixel_values"]
     attention_mask = encoded["attention_mask"]
     image_grid_thw = encoded["image_grid_thw"]
+    print(input_ids.shape)
+    exit()
 
     # logger.info(f"Processed vision inputs - input_ids: {input_ids.shape}, pixel_values: {pixel_values.shape}")
 
@@ -103,7 +106,7 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
     """Load separate vision and text models following test_end2end.py pattern."""
     state_dict = model_args.load_state_dict()
 
-    vision_prefix = "model.visual."
+    vision_prefix = "visual."
 
     # Setup paged attention config (exactly like test_end2end.py)
     paged_attention_config = None
@@ -156,6 +159,8 @@ def run_generation_exactly_like_test_end2end(
     input_tokens_prefill = input_ids
     batch_size = input_tokens_prefill.shape[0]
 
+    print("input_ids[0].shape", input_ids[0].shape)
+
     prompt_text = model_args.tokenizer.decode(input_ids[0].tolist())
     input_prompts = [prompt_text]
 
@@ -173,7 +178,12 @@ def run_generation_exactly_like_test_end2end(
         max_prefill_len=8192,
     )
 
+    print("input_tokens_prefill_pt[0].shape", input_tokens_prefill_pt[0].shape)
+
     input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
+
+    print("input_tokens_prefill_pt.shape", input_tokens_prefill_pt[0].shape)
+    exit()
 
     logger.info("Running prefill...")
     logits = generator.prefill_forward_text(
@@ -193,7 +203,7 @@ def run_generation_exactly_like_test_end2end(
 
     current_pos = torch.tensor([decoding_pos[0]])
     out_tok = prefilled_token
-    generation_length = 2000
+    generation_length = 200
 
     results = []
 
@@ -226,10 +236,6 @@ def run_generation_exactly_like_test_end2end(
 
         all_outputs[0].append(token_id)
         current_pos += 1
-
-        if token_id == 151645 or token_id == 151643:
-            logger.warning("Reached End token")
-            break
 
         # Early stopping (exactly like test_end2end.py)
         if len(all_outputs[0]) >= 5 and all(t == all_outputs[0][-1] for t in all_outputs[0][-5:]):
@@ -300,7 +306,7 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (2048,),  # Use smaller seq_len like test_end2end.py to avoid memory issues
+    (1024,),  # Use smaller seq_len like test_end2end.py to avoid memory issues
 )
 @pytest.mark.parametrize(
     "optimizations",

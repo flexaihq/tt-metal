@@ -1,19 +1,29 @@
-"""
-This is the end-to-end pipeline for the Qwen-VL 2.5 model.
+from typing import List
 
-The `Qwen25VLTransformer` class inherits from the `Transformer` class in tt_transformers.
-It overrides `prepare_inputs_prefill` to run inference on the vision model and
-pass the resulting visual tokens to the text model along with text tokens.
-"""
-
-
-import ttnn
 import torch
 
+import ttnn
 from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.multimodal.llama_vision_model import _stack_images
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_vision_model import TtQwen2_5_VisionTransformerPretrainedModel
 
 
-class Qwen25VLTransformer(Transformer):
+def _stack_images(
+    images: List[List[torch.Tensor]],  # batch of samples, each with list of image embeddings
+) -> List[torch.Tensor]:
+    """
+    Concatenate image embeddings per sample into a single 2D tensor.
+
+    Args:
+        images: List of samples, each being a list of [num_patches, hidden_dim] tensors
+
+    Returns:
+        List of [total_patches, hidden_dim] tensors, one per sample
+    """
+    return [torch.cat(image_list, dim=0) for image_list in images]
+
+
+class TtQwen_Model(Transformer):
     def __init__(
         self,
         args,
@@ -34,17 +44,26 @@ class Qwen25VLTransformer(Transformer):
             use_paged_kv_cache=use_paged_kv_cache,
         )
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
+        self.vision_model = TtQwen2_5_VisionTransformerPretrainedModel(
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            state_dict_prefix="model.visual.",
+            dtype=dtype,
+            model_args=args,
+            weight_cache_path=args.weight_cache_path(dtype),
+            layers=args.vision_n_layers,
+        )
+
+    def prepare_inputs_prefill(self, pt_tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
         TODO: Debate whether this function is responsible for padding
         """
 
-        tokens = tokens.reshape(1, 1, 1, -1)
-        S = tokens.shape[-1]
+        S = pt_tokens.shape[-1]
         tokens = ttnn.from_torch(
-            tokens,
+            pt_tokens.reshape(1, 1, 1, -1),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -54,21 +73,13 @@ class Qwen25VLTransformer(Transformer):
         tokens_embd = self.embd(tokens)
         # tokens_embd = ttnn.multiply(tokens_embd, self.embed_scale)
 
-        pixel_values = kwargs["processed_inputs"]["pixel_values"]
-        input_ids = kwargs["processed_inputs"]["input_ids"]
-        image_grid_thw = kwargs["processed_inputs"]["image_grid_thw"]
-
-        vision_model = kwargs["vision_model"]
-        pixel_values = self.args.prepare_residual_tensor_prefill(pixel_values.unsqueeze(0), force_replicated=True)
-
-        vision_output = vision_model(pixel_values, image_grid_thw)
+        vision_output = self.compute_vision_token(**kwargs)
 
         tokens_embd = ttnn.to_torch(tokens_embd)
         comp_vision_output = ttnn.to_torch(ttnn.from_device(vision_output))
 
-        input_ids = torch.nn.functional.pad(input_ids, (0, tokens_embd.shape[1] - input_ids.shape[1]), "constant", 0)
         image_features = comp_vision_output.squeeze(0)
-        special_image_mask = (input_ids == 151655).unsqueeze(-1)
+        special_image_mask = (pt_tokens == 151655).unsqueeze(-1)
         special_image_mask = special_image_mask.expand_as(tokens_embd)
         image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
         tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
@@ -115,3 +126,9 @@ class Qwen25VLTransformer(Transformer):
             tt_chunk_page_table = None
 
         return tokens_embd, tt_rot_mats_prefill_global, tt_page_table, tt_chunk_page_table
+
+    def compute_vision_token(self, pixel_values, image_grid_thw):
+        pixel_values = self.args.prepare_residual_tensor_prefill(pixel_values.unsqueeze(0), force_replicated=True)
+
+        vision_output = self.vision_model(pixel_values, image_grid_thw)
+        return vision_output

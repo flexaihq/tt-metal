@@ -7,11 +7,9 @@ import torch
 from loguru import logger
 
 import ttnn
-
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.experimental.qwen25_vl.tt.vision_model import TtQwen2_5_VisionTransformerPretrainedModel
-from models.utility_functions import comp_pcc, skip_for_grayskull, comp_allclose
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_vision_model import TtQwen2_5_VisionTransformerPretrainedModel
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")

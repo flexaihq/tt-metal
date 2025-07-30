@@ -4,11 +4,11 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.experimental.qwen25_vl.tt.text_mlp import MLP as QwenMLP
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_text_mlp import MLP as QwenMLP
 
 
 class TransformerBlock(LightweightModule):

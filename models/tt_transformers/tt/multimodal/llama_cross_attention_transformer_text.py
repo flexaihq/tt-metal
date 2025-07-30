@@ -111,9 +111,16 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             configuration.dim,
         )
         learn_embedding_prefix = f"{state_dict_prefix}learnable_embedding."
-        self.learnable_embedding.load_state_dict(
-            {k[len(learn_embedding_prefix) :]: v for k, v in state_dict.items() if k.startswith(learn_embedding_prefix)}
-        )
+
+        if learn_embedding_prefix in state_dict:
+            self.learnable_embedding.load_state_dict(
+                {
+                    k[len(learn_embedding_prefix) :]: v
+                    for k, v in state_dict.items()
+                    if k.startswith(learn_embedding_prefix)
+                }
+            )
+
         self.num_frozen_embeddings = self.tok_embeddings.num_embeddings
         self._thresh = self.num_frozen_embeddings - 1
 
@@ -289,7 +296,11 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                     h,
                     xattn_mask=xattn_mask,
                     xattn_cache=(
-                        xattn_caches[xattn_layer_idx] if cross_page_table is None else kv_cache[total_layer_idx]
+                        None
+                        if len(xattn_caches) < xattn_layer_idx + 1
+                        else xattn_caches[xattn_layer_idx]
+                        if cross_page_table is None
+                        else kv_cache[total_layer_idx]
                     ),
                     full_text_row_masked_out_mask_1NSH=full_text_row_masked_out_mask_1NSH,
                     full_text_row_masked_out_mask_11SD=full_text_row_masked_out_mask_11SD,

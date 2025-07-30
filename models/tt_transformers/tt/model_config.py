@@ -1556,7 +1556,7 @@ class ModelArgs:
     def _set_vision_params(self, vision_config):
         self.vision_chunk_size = vision_config.get("vision_chunk_size", 896)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 8)
+        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", -1)
         self.vision_dim = vision_config.get("hidden_size", 1152)
 
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
@@ -1710,6 +1710,7 @@ class ModelArgs:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
                 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
+
                 if "Qwen2.5-VL-7B" in self.model_name:
                     model = AutoModelForImageTextToText.from_pretrained(self.CKPT_DIR, torch_dtype="auto")
                 else:
@@ -2075,6 +2076,7 @@ class ModelArgs:
                 "Qwen2.5-1.5B": "Qwen/Qwen2.5-1.5B-Instruct",
                 "Qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",
                 "Qwen2.5-7B": "Qwen/Qwen2.5-7B-Instruct",
+                "Qwen2.5-VL-7B": "Qwen/Qwen2.5-VL-7B-Instruct",
                 "Qwen2.5-14B": "Qwen/Qwen2.5-14B-Instruct",
                 "Qwen2.5-32B": "Qwen/Qwen2.5-32B-Instruct",
                 "Qwen2.5-72B": "Qwen/Qwen2.5-72B-Instruct",

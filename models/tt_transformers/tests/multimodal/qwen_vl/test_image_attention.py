@@ -8,8 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.experimental.qwen25_vl.tt.attention import TtQwen2_5_VLVisionSdpaAttention
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_image_attention import TtQwen2_5_VLVisionSdpaAttention
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 

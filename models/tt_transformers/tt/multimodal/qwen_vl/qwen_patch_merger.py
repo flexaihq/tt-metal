@@ -6,8 +6,8 @@ so it was written specifically based on Qwen-VL's architecture.
 """
 
 import ttnn
-from models.experimental.qwen25_vl.tt.rmsnorm import RMSNorm
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_rmsnorm import RMSNorm
 
 
 class TTQwen2_5_VLPatchMerger:

@@ -1,15 +1,15 @@
 """"Test for Qwen 2.5 VL Patch Merger"""
 
+import os
+
+import pytest
+import torch
 from loguru import logger
 
-import torch
-import pytest
-import os
 import ttnn
-from models.experimental.qwen25_vl.tt.patch_merger import TTQwen2_5_VLPatchMerger
-
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_patch_merger import TTQwen2_5_VLPatchMerger
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()

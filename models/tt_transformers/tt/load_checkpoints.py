@@ -262,7 +262,6 @@ def map_vision_meta_to_hf_keys(loaded_weights):
     for key, tensor in loaded_weights.items():
         # Handle full model paths with layer numbers
         if "vision_tower.vision_model.encoder.layers." in key:
-            print(f"Processing key: {key}")
             parts = key.split(".")
             layer_num = parts[4]
             remainder = ".".join(parts[5:])

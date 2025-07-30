@@ -5,9 +5,9 @@ consisting of RMSnorm and self-attention layer followed by an MLP layer.
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.qwen25_vl.tt.mlp import QwenTTVisionMLP
-from models.experimental.qwen25_vl.tt.rmsnorm import RMSNorm
-from models.experimental.qwen25_vl.tt.attention import TtQwen2_5_VLVisionSdpaAttention
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_image_attention import TtQwen2_5_VLVisionSdpaAttention
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_image_mlp import QwenTTVisionMLP
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_rmsnorm import RMSNorm
 
 
 class TtQwen2_5_VLVisionBlock(LightweightModule):

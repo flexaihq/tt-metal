@@ -164,6 +164,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         batch_masks: List[List[List[int]]],
         total_len: int,
         prefill_len: int,
+        **kwargs,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         skip_vision_encoder = False
 
@@ -273,6 +274,7 @@ class CrossAttentionTransformer(torch.nn.Module):
         page_table=None,
         cross_page_table=None,
         text_only_inference=False,
+        **kwargs,
     ):
         B = tokens.shape[0]
         assert B == 1, f"Only batch 1 is supported, got {B}"
