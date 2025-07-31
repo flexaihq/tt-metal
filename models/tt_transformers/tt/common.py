@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import re
 from enum import Enum
 from typing import Optional
@@ -33,8 +34,8 @@ class PagedAttentionConfig:
 class RopeScalingType(str, Enum):
     """Types of RoPE scaling."""
 
-    # LINEAR = "linear"
     # DYNAMIC = "dynamic"
+    LINEAR = "linear"
     YARN = "yarn"
     LLAMA3 = "llama3"
     DEFAULT = "default"
@@ -56,6 +57,14 @@ class RopeScalingLlama3(RopeScaling):
     high_freq_factor: Optional[float] = 4.0
 
 
+class RopeScalingLinear(RopeScaling):
+    """RoPE scaling configuration for Linear."""
+
+    # Linear-specific parameters
+    factor: float = 8.0
+    original_max_position_embeddings: int = 2048
+
+
 class RopeScalingYarn(RopeScaling):
     """RoPE scaling configuration for Yarn."""
 
@@ -72,6 +81,8 @@ def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
         return RopeScalingLlama3(**rope_scaling_params)
     elif rope_scaling_type == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
+    elif rope_scaling_type == RopeScalingType.LINEAR:
+        return RopeScalingLinear(**rope_scaling_params)
     elif rope_scaling_type in ["default", "mrope"]:
         logger.warning(
             f"Rope scaling type was set to {rope_scaling_type}, defaulting to no rope scaling as this rope type is not supported yet by TTT"
@@ -209,16 +220,22 @@ def preprocess_inputs_prefill(
 def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
     chat = []
-    if system_prompt_text:
-        chat.append({"role": "system", "content": system_prompt_text})
-    if prompt_text:
-        chat.append({"role": "user", "content": prompt_text})
-    return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
+    if isinstance(prompt_text, str):
+        if system_prompt_text:
+            chat.append({"role": "system", "content": system_prompt_text})
+        if prompt_text:
+            chat.append({"role": "user", "content": prompt_text})
+        return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+    else:
+        from transformers import AutoProcessor
+
+        model_id = "google/gemma-3-4b-it"
+        processor = AutoProcessor.from_pretrained(model_id)
+        return processor.apply_chat_template([prompt_text], add_generation_prompt=True, tokenize=True)[0]
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
-    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
-    # Values obtained from grid search
+def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Llama-3.x specific scaling for rotary embeddings."""
     low_freq_factor = 1
     high_freq_factor = 4
 
@@ -236,6 +253,30 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: in
             smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
             new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
+def compute_linear_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Linear scaling for rotary embeddings."""
+    freqs /= scale_factor
+    return freqs
+
+
+def compute_default_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Default scaling for rotary embeddings."""
+    return freqs
+
+
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
+
+    hf_model_env = os.getenv("HF_MODEL")
+
+    if hf_model_env == "google/gemma-3-4b-it":
+        freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
+    elif "LLAMA_DIR" in os.environ or (hf_model_env and "llama" in hf_model_env.lower()):
+        freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
+
+    return freqs
 
 
 def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
@@ -585,7 +626,11 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    from models.tt_transformers.tt.model import Transformer
+    if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
+        from models.experimental.gemma3_4b.tt.text_model import Gemma3_4BTransformer as Transformer
+    else:
+        from models.tt_transformers.tt.model import Transformer
+
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(
