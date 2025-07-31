@@ -76,6 +76,12 @@ run_phi4_func() {
   HF_MODEL=microsoft/phi-4 pytest models/tt_transformers/demo/simple_text_demo.py -k "accuracy and ci-token-matching"
 }
 
+run_gemma3_1b_func(){
+
+  MESH_DEVICE=N150 HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-1b-it WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
+
+}
+
 run_segformer_func() {
   #Segformer Segmentation Demo
   pytest models/demos/segformer/demo/demo_for_semantic_segmentation.py
