@@ -436,10 +436,6 @@ class Gemma3_4BTransformer(LightweightModule):
                 keepdim=True,
                 use_multicore=False if self.args.max_batch_size > 1 else True,  # ,output_tensor=tokens
             )
-        else:
-            # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-            if not self.args.is_galaxy:
-                tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits
 

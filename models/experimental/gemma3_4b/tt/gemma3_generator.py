@@ -1,4 +1,10 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+"""
+This is the Replica version of the Generator class for the Gemma Model.
+This adds support for kwargs that contains the procesed inputs and the vision submodule of the model.
+
+"""
+
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -1178,7 +1184,7 @@ class Gemma3Generator:
             for m in self.model:
                 ttnn.close_mesh_device(m.mesh_device)
 
-        if hasattr(super(Generator, self), "__del__"):
+        if hasattr(super(Gemma3Generator, self), "__del__"):
             super().__del__()
 
 
