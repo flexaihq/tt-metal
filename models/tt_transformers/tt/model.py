@@ -55,7 +55,23 @@ class Transformer(LightweightModule):
             args.rope_theta,
             args.rope_scaling_factor,
             args.orig_context_len,
+            args.rope_type,
         )
+
+        if args.rope_local_theta is not None:
+            self.rope_setup_local = RotarySetup(
+                mesh_device,
+                args.max_batch_size,
+                args.head_dim,
+                args.max_seq_len,
+                args.rope_local_theta,
+                args.rope_scaling_factor,
+                args.orig_context_len,
+                "default",
+            )
+        else:
+            self.rope_setup_local = None
+
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
         self.layers = [
@@ -102,6 +118,8 @@ class Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
+        self.embed_scale = args.embed_scale
+
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -118,7 +136,8 @@ class Transformer(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        tokens_embd = self.embd(tokens)
+        tokens_embd = self.embd(tokens, self.embed_scale)
+
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
@@ -129,6 +148,13 @@ class Transformer(LightweightModule):
             self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
+        if self.rope_setup_local is not None:
+            tt_rot_mats_prefill_local = [
+                self.rope_setup_local.cos_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_setup_local.sin_matrix[:, :, start_pos : start_pos + S, :],
+            ]
+        else:
+            tt_rot_mats_prefill_local = None
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
@@ -152,7 +178,7 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
+        return tokens_embd, [tt_rot_mats_prefill, tt_rot_mats_prefill_local], tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -224,13 +250,18 @@ class Transformer(LightweightModule):
         Embed tokens
         """
         tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
-        tt_tokens = self.embd(tokens)
+        if self.rope_setup_local is not None:
+            tt_rot_mats_local = self.rope_setup_local.get_rot_mats(rope_idxs)
+        else:
+            tt_rot_mats_local = None
+        tt_tokens = self.embd(tokens, self.embed_scale)
+
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         tt_tokens = ttnn.to_memory_config(
             tt_tokens,
             self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
-        return tt_tokens, current_pos, tt_rot_mats, page_table
+        return tt_tokens, current_pos, [tt_rot_mats, tt_rot_mats_local], page_table
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """
@@ -393,5 +424,5 @@ class Transformer(LightweightModule):
 
         if mode == "prefill":
             x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x

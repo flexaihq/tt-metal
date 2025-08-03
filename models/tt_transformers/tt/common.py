@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 import re
+from types import SimpleNamespace
 
 import torch
+from llama_models.llama3.api.datatypes import ImageMedia
 from loguru import logger
 
 import ttnn
@@ -202,21 +203,20 @@ def compute_default_parameters(freqs: torch.Tensor, scale_factor: float, orig_co
     return freqs
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int, rope_type="llama3"):
     # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
 
-    # hf_model_env = os.getenv("HF_MODEL")
+    if rope_type == "default":
+        freqs = compute_default_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "linear":
+        freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "llama3":
+        freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
 
-    # if hf_model_env == "google/gemma-3-4b-it":
-    #     freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
-    # elif "LLAMA_DIR" in os.environ or (hf_model_env and "llama" in hf_model_env.lower()):
-    #     freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
-
-    freqs /= scale_factor
     return freqs
 
 
-def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, rope_type="llama3"):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -231,7 +231,7 @@ def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
     if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type=rope_type)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
@@ -554,11 +554,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
-        from models.experimental.gemma3_4b.tt.text_model import Gemma3_4BTransformer as Transformer
-    else:
-        from models.tt_transformers.tt.model import Transformer
-
+    from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(
@@ -587,3 +583,46 @@ def create_tt_model(
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
 
     return tt_model_args, model, tt_kv_cache, state_dict
+
+
+def hf_multimodal_encode(messages, processor):
+    hf_messages = []
+
+    for msg in messages:
+        hf_content = []
+
+        for item in msg.content:
+            if isinstance(item, ImageMedia):
+                hf_content.append(
+                    {
+                        "type": "image",
+                        "image": item.image,
+                    }
+                )
+            elif isinstance(item, str):
+                hf_content.append(
+                    {
+                        "type": "text",
+                        "text": item,
+                    }
+                )
+
+        hf_messages.append(
+            {
+                "role": msg.role,
+                "content": hf_content,
+            }
+        )
+
+    encoded = processor.apply_chat_template(
+        hf_messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
+    ).to("cpu", dtype=torch.bfloat16)
+
+    return SimpleNamespace(
+        **encoded,
+        tokens=encoded["input_ids"].squeeze(0),
+        vision=SimpleNamespace(
+            images=encoded["pixel_values"],
+            mask=None,
+        ),
+    )

@@ -57,7 +57,7 @@ class Generator:
 
     # Note: This function is called by vLLM
     def prefill_forward_text(
-        self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, empty_slots=None
+        self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, empty_slots=None, **kwargs
     ):
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
@@ -79,6 +79,7 @@ class Generator:
             seq_len = int(prompt_lens[idx])
             last_token_idx = seq_len - 1
             prefill_seq_len = get_padded_prefill_len(seq_len)
+            local_kwargs = kwargs.copy()  # Avoid modifying original kwargs
 
             logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
@@ -94,6 +95,12 @@ class Generator:
             )
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
+            # Check if 'pixel_values' exists and index it safely
+            if "pixel_values" in local_kwargs:
+                local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
+                if "image_grid_thw" in local_kwargs:
+                    local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
+
             logits = self.prefill_forward_single_user_text(
                 prefill_ids,
                 page_table=page_table_user,
@@ -101,6 +108,7 @@ class Generator:
                 last_token_idx=last_token_idx,
                 kv_cache=model_kv_cache,
                 model_id=model_id,
+                **local_kwargs,
             )
             out_list.append(logits)
 
@@ -116,7 +124,9 @@ class Generator:
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
 
-    def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1):
+    def prefill_forward_single_user_text(
+        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
+    ):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         if use_chunked_prefill:
@@ -165,6 +175,7 @@ class Generator:
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
+                    **kwargs,
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
@@ -175,6 +186,7 @@ class Generator:
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
+                    **kwargs,
                 )
 
                 if chunk_start == last_chunk_start:
@@ -185,6 +197,7 @@ class Generator:
             prefill_input, rot_mats_prefill, page_table_tt, _ = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
+                **kwargs,
             )
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
@@ -399,6 +412,7 @@ class Generator:
         kv_cache=None,
         cross_page_table=None,
         model_id=-1,
+        **kwargs,
     ):
         """
         Performs vision encode step then text prefill.
@@ -420,6 +434,7 @@ class Generator:
                 batch_masks=[vision_mask],
                 total_len=total_len,
                 prefill_len=prefill_len,
+                **kwargs,
             )
 
             if cross_page_table is not None:
@@ -453,6 +468,8 @@ class Generator:
             page_table=page_table,
             cross_page_table=cross_page_table,
             text_only_inference=text_only_inference,
+            vision_tokens=vision_tokens,
+            **kwargs,
         )
 
         tt_logits = self.model[model_id].ttnn_prefill_forward(
@@ -488,6 +505,64 @@ class Generator:
         self,
         vision_images,
         vision_masks,
+        tokens,
+        xattn_caches,
+        total_lens,
+        prompt_lens,
+        page_table=None,
+        kv_cache=None,
+        cross_page_table=None,
+        empty_slots=None,
+        **kwargs,
+    ):
+        import os
+
+        if os.environ.get("HF_MODEL"):
+            logits = self.prefill_forward_text(
+                tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                pixel_values=vision_images,
+                **kwargs,
+            )
+
+            return logits, None, None, None, None
+
+        else:
+            (
+                output_logits,
+                prefill_output_xattn_masks,
+                prefill_output_full_text_row_masked_out_masks,
+                decode_output_xattn_masks,
+                decode_output_full_text_row_masked_out_masks,
+            ) = self.prefill_forward_llama_vision(
+                vision_images,
+                vision_masks,
+                tokens,
+                xattn_caches,
+                total_lens,
+                prompt_lens,
+                page_table=None,
+                kv_cache=None,
+                cross_page_table=None,
+                empty_slots=None,
+                **kwargs,
+            )
+
+            return (
+                output_logits,
+                prefill_output_xattn_masks,
+                prefill_output_full_text_row_masked_out_masks,
+                decode_output_xattn_masks,
+                decode_output_full_text_row_masked_out_masks,
+            )
+
+    # Note: This function is called by vLLM
+    def prefill_forward_llama_vision(
+        self,
+        vision_images,
+        vision_masks,
         tokens: torch.Tensor,
         xattn_caches,
         total_lens,
@@ -496,6 +571,7 @@ class Generator:
         kv_cache=None,
         cross_page_table=None,
         empty_slots=None,
+        **kwargs,
     ):
         """
         Batched version of _prefill_forward_single_user for vision model.
@@ -531,6 +607,11 @@ class Generator:
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
             model_xattn_cache = xattn_caches[model_id] if xattn_caches is not None else None
 
+            # prefill_seq_len = get_padded_prefill_len(seq_len)
+            # tokens = torch.cat(
+            #     [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
+            # )
+
             (
                 model_xattn_cache,
                 prefill_cross_attention_masks,
@@ -550,6 +631,8 @@ class Generator:
                 kv_cache=model_kv_cache,
                 cross_page_table=user_cross_page_table,
                 model_id=model_id,
+                image_grid_thw=kwargs["image_grid_thw"][idx] if kwargs.get("image_grid_thw") else None,
+                input_ids=kwargs["input_ids"][idx] if kwargs.get("input_ids") else None,
             )
 
             if xattn_caches is not None:
@@ -581,7 +664,7 @@ class Generator:
         )
 
     # Note: This function is called by vLLM
-    def decode_forward(
+    def decode_forward_llama_vision(
         self,
         start_pos,
         tokens,
@@ -644,6 +727,47 @@ class Generator:
             return to_host
         else:
             return tt_logits
+
+    def decode_forward(
+        self,
+        start_pos,
+        tokens,
+        prefill_cross_attention_masks,
+        prefill_full_text_row_masked_out_mask,
+        decode_cross_attention_masks,
+        decode_full_text_row_masked_out_mask,
+        xattn_caches=None,
+        page_table=None,
+        kv_cache=None,
+        cross_page_table=None,
+        enable_trace=True,
+        read_from_device=True,
+    ):
+        import os
+
+        if os.environ.get("HF_MODEL"):
+            return self.decode_forward_text(
+                tokens,
+                start_pos,
+                enable_trace=enable_trace,
+                page_table=page_table,
+                kv_cache=kv_cache,
+            )
+        else:
+            return self.decode_forward_llama_vision(
+                start_pos,
+                tokens,
+                prefill_cross_attention_masks,
+                prefill_full_text_row_masked_out_mask,
+                decode_cross_attention_masks,
+                decode_full_text_row_masked_out_mask,
+                xattn_caches,
+                page_table,
+                kv_cache,
+                cross_page_table,
+                enable_trace,
+                read_from_device,
+            )
 
     # Note: This function is called by vLLM
     def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
