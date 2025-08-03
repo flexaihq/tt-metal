@@ -1,6 +1,4 @@
 """
-source: models/common/rmsnorm.py
-
 This is the modified version of the RMSNorm for Gemma-3-4b-it model.
 
 We have modified the RMSNorm implementation equivalent to RMSNorm in Gemma-3-4b-it.
@@ -80,6 +78,7 @@ class RMSNorm(LightweightModule):
         )
         if add_unit_offset:
             torch_weight = torch_weight + 1.0
+
         # # Add offset before caching
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
 
@@ -166,5 +165,8 @@ class RMSNorm(LightweightModule):
 
         if memory_config is not None:
             output = ttnn.to_memory_config(output, memory_config)
+
+        ttnn.deallocate(xnorm)
+        ttnn.deallocate(inp)
 
         return output

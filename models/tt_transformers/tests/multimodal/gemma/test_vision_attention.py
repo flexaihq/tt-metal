@@ -1,6 +1,3 @@
-"""Gemma-3-4b-it Test for Vision Attention"""
-
-
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
@@ -16,9 +13,7 @@ from models.tt_transformers.tt.load_checkpoints import (  # convert_vision_hf_to
     convert_vision_hf_to_meta,
 )
 from models.tt_transformers.tt.model_config import ModelArgs
-
-
-from models.experimental.gemma3_4b.tt.gemma_image_attention import TtGemmaImageAttention
+from models.tt_transformers.tt.multimodal.gemma.gemma_image_attention import TtGemmaImageAttention
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -71,23 +66,32 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
 
     pt_attention_input = torch.randn(batch, seq_len, dim)
 
-    attention_input = model_args.prepare_residual_tensor_prefill(
-        pt_attention_input,
-        force_replicated=True,
+    # attention_input = model_args.prepare_residual_tensor_prefill(
+    #     pt_attention_input,
+    #     force_replicated=True,
+    # )
+    attention_input = ttnn.from_torch(
+        pt_attention_input.unsqueeze(0),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
     )
 
     tt_out = tt_model(attention_input)
 
+    print("TT output :", tt_out)
     # Doing contract in tt is correct!!
-    tt_output_torch = ttnn.to_torch(tt_out, device=mesh_device)[0, :, :, :]
+    tt_output_torch = ttnn.to_torch(
+        tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1), device=mesh_device
+    )[0, :, :, :]
 
     reference_output = reference_model(pt_attention_input)[0]
-
+    print("Reference output shape:", reference_output.shape)
+    tt_output_torch = tt_output_torch[:, :4097, :]
+    print("TT output shape:", tt_output_torch.shape)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
-
-    non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
-    tt_output_torch = tt_output_torch[non_zero_indices]
-    reference_output = reference_output[non_zero_indices]
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")

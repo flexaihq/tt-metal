@@ -1,6 +1,4 @@
 """
-source: models/tt_transformers/tt/multimodal/llama_image_block.py
-
 This is the ImageTransformer block for Gemma-3-4b-it.
 We have reused the TtLlamaImageTransformerBlock with incorporating the
 TtGemmaImageAttention and TtGemmaImageFeedForward
@@ -12,9 +10,8 @@ TtGemmaImageAttention and TtGemmaImageFeedForward
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-from models.experimental.gemma3_4b.tt.gemma_image_attention import TtGemmaImageAttention
-from models.experimental.gemma3_4b.tt.gemma_image_mlp import TtGemmaImageFeedForward
+from models.tt_transformers.tt.multimodal.gemma.gemma_image_attention import TtGemmaImageAttention
+from models.tt_transformers.tt.multimodal.gemma.gemma_image_mlp import TtGemmaImageFeedForward
 from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 
 
@@ -102,11 +99,15 @@ class TtGemmaImageTransformerBlock(LightweightModule):
         if self.gated:
             attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 
+        if self.num_devices > 1:
+            attn_out = ttnn.all_gather(attn_out, dim=3, num_links=1)
         res = ttnn.add(x_11SH, attn_out)
+
         mlp_out = self.mlp(self.ln_2(res))
         if self.gated:
             mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffn))
         out = ttnn.add(res, mlp_out)
+
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(res)

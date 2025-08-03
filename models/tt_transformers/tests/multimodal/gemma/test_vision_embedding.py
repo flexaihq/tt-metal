@@ -1,6 +1,3 @@
-"""Gemma-3-4b-it Test for Vision Embedding"""
-
-
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
@@ -13,8 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.experimental.gemma3_4b.tt.siglip_vision_embedding import TtSiglipVisionEmbeddings
+from models.tt_transformers.tt.multimodal.gemma.siglip_vision_embedding import TtSiglipVisionEmbeddings
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from ttnn import ConcatMeshToTensor
 

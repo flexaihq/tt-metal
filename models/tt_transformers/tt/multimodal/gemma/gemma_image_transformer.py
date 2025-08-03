@@ -1,6 +1,4 @@
 """
-source: models/tt_transformers/tt/multimodal/llama_image_transformer.py
-
 This is the Entire ImageTransformer for Gemma-3-4b-it.
 We have adapted the TtGemmaImageTransformerBlock from TtLlamaImageTransformerBlock
 with changes incorporating the GemmaImageAttention and GemmaImageFeedForward
@@ -12,7 +10,7 @@ with changes incorporating the GemmaImageAttention and GemmaImageFeedForward
 from tqdm import tqdm
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.gemma3_4b.tt.gemma_image_block import TtGemmaImageTransformerBlock
+from models.tt_transformers.tt.multimodal.gemma.gemma_image_block import TtGemmaImageTransformerBlock
 
 
 class TtGemmaImageTransformer(LightweightModule):
