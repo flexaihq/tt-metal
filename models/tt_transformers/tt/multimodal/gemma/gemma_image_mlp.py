@@ -117,4 +117,11 @@ class TtGemmaImageFeedForward(LightweightModule):
             pre_bias_output = c_proj_out
 
         output = ttnn.add(pre_bias_output, self.c_proj_bias)
+
+        ttnn.deallocate(c_fc_out)
+        ttnn.deallocate(c_proj_out)
+        ttnn.deallocate(pre_bias_output)
+        # Deallocate input tensor to free memory
+        ttnn.deallocate(x_in)
+        # Reshape output back to original shape
         return output

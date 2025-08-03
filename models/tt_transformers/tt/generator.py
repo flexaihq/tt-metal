@@ -97,7 +97,7 @@ class Generator:
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
 
             # Check if 'pixel_values' exists and index it safely
-            if "pixel_values" in local_kwargs:
+            if "pixel_values" in local_kwargs and local_kwargs["pixel_values"] is not None:
                 local_kwargs["pixel_values"] = local_kwargs["pixel_values"][idx]
                 if "image_grid_thw" in local_kwargs:
                     local_kwargs["image_grid_thw"] = local_kwargs["image_grid_thw"][idx]
@@ -413,6 +413,7 @@ class Generator:
         kv_cache=None,
         cross_page_table=None,
         model_id=-1,
+        **kwargs,
     ):
         """
         Performs vision encode step then text prefill.
@@ -434,6 +435,7 @@ class Generator:
                 batch_masks=[vision_mask],
                 total_len=total_len,
                 prefill_len=prefill_len,
+                **kwargs,
             )
 
             if cross_page_table is not None:
@@ -467,6 +469,8 @@ class Generator:
             page_table=page_table,
             cross_page_table=cross_page_table,
             text_only_inference=text_only_inference,
+            vision_tokens=vision_tokens,
+            **kwargs,
         )
 
         tt_logits = self.model[model_id].ttnn_prefill_forward(
@@ -565,6 +569,7 @@ class Generator:
         kv_cache=None,
         cross_page_table=None,
         empty_slots=None,
+        **kwargs,
     ):
         """
         Batched version of _prefill_forward_single_user for vision model.
@@ -600,6 +605,11 @@ class Generator:
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
             model_xattn_cache = xattn_caches[model_id] if xattn_caches is not None else None
 
+            # prefill_seq_len = get_padded_prefill_len(seq_len)
+            # tokens = torch.cat(
+            #     [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
+            # )
+
             (
                 model_xattn_cache,
                 prefill_cross_attention_masks,
@@ -619,6 +629,8 @@ class Generator:
                 kv_cache=model_kv_cache,
                 cross_page_table=user_cross_page_table,
                 model_id=model_id,
+                image_grid_thw=kwargs["image_grid_thw"][idx] if kwargs.get("image_grid_thw") else None,
+                input_ids=kwargs["input_ids"][idx] if kwargs.get("input_ids") else None,
             )
 
             if xattn_caches is not None:
