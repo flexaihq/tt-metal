@@ -118,4 +118,6 @@ class TtGemmaConv2dPatch(LightweightModule):
             core_grid=ttnn.CoreGrid(y=8, x=8),
         )
 
+        ttnn.deallocate(x)
+
         return out

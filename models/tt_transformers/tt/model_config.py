@@ -1253,9 +1253,9 @@ class ModelArgs:
             )
 
             self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = (
-                ttnn.DRAM_MEMORY_CONFIG if self.model_name == "gemma-3-1b-it" else ttnn.L1_MEMORY_CONFIG
+                ttnn.DRAM_MEMORY_CONFIG if self.model_name == "gemma-3-4b-it" else ttnn.L1_MEMORY_CONFIG
             )
-            self.lm_head_dtype = ttnn.bfloat16 if self.model_name == "gemma-3-1b-it" else None
+            self.lm_head_dtype = ttnn.bfloat16 if self.model_name == "gemma-3-4b-it" else None
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1

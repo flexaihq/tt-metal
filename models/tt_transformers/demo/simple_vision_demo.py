@@ -163,7 +163,9 @@ def prepare_generator_args(
         # 4,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 14951424, "num_command_queues": 2, "l1_small_size": 24576}], indirect=True
+)
 def test_multimodal_demo_text(
     mesh_device,
     warmup_iters,
