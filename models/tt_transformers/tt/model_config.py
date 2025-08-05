@@ -99,7 +99,11 @@ class ModelOptimizations:
                 }
             )
         else:
-            if base_model_name.startswith("Llama-3") or base_model_name.startswith("Mistral-7B"):
+            if (
+                base_model_name.startswith("Llama-3")
+                or base_model_name.startswith("Mistral-7B")
+                or base_model_name.startswith("gemma-3-1b")
+            ):
                 logger.info(
                     f"Llama 3 and Mistral 7B models test insensitive to attention precision, using BFP8 attention and kv-cache with FP16 MLP accumulation even in accuracy mode"
                 )
@@ -143,7 +147,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name == "Qwen2.5-7B":
+        if base_model_name in ["Qwen2.5-7B", "gemma-3-1b"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
@@ -235,7 +239,7 @@ class ModelOptimizations:
                 # Attention
                 TensorGroup.WQKV: PrecisionSetting.BFP8,
                 TensorGroup.WO: PrecisionSetting.BFP8,
-                TensorGroup.KV_CACHE: PrecisionSetting.BF16,  # Upgraded from BFP8 to prevent accumulation errors
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
                 # Activation across whole model
                 TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
             },
@@ -245,7 +249,7 @@ class ModelOptimizations:
                 OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
                 # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
                 OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,  # Upgraded from HIFI2 for better precision
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
@@ -1261,6 +1265,10 @@ class ModelArgs:
                 ),
             )
 
+            self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = (
+                ttnn.DRAM_MEMORY_CONFIG if self.model_name == "gemma-3-1b-it" else ttnn.L1_MEMORY_CONFIG
+            )
+            self.lm_head_dtype = ttnn.bfloat16 if self.model_name == "gemma-3-1b-it" else None
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
@@ -1404,16 +1412,15 @@ class ModelArgs:
     def _set_model_specific_params(self):
         # Gemma3 specific params
         self.rms_norm_add_unit_offset = "gemma-3" in self.base_model_name.lower()
+        self.embed_scale = 1.0 if not "gemma-3" in self.base_model_name.lower() else self.dim ** 0.5
 
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
         eos_token_id = config.get("eos_token_id", None)
 
-        self.eos_token_id = (
-            None if isinstance(eos_token_id, int) else eos_token_id
-        )  # Gemma like models can have a list of eos token ids
+        self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
 
-        self.sliding_window_pattern = config.get("sliding_window_pattern", 1)
+        sliding_window_pattern = config.get("sliding_window_pattern", None)
 
         text_config = config.get("text_config", config)
 
@@ -1427,6 +1434,11 @@ class ModelArgs:
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+        self.rope_local_theta = text_config.get("rope_local_base_freq", None)
+        self.is_sliding = [
+            False if sliding_window_pattern is None else bool((layer_num + 1) % sliding_window_pattern)
+            for layer_num in range(self.n_layers)
+        ]
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -2246,13 +2258,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            rotary_emb = model.model.rotary_emb
-
-            if "gemma-3" in self.model_name:
-                wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb)
-            else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb)
-
+            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def reference_attention(self):
@@ -2268,7 +2274,6 @@ class ModelArgs:
                 "MistralAttention",
                 "Gemma3Attention",
             )
-
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2461,30 +2466,28 @@ class HfDecoderWrapper:
 
 
 class HfGemmaDecoderWrapper:
-    def __init__(self, decoder, head_dim, rotary_emb):
+    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local):
         from transformers import DynamicCache
 
         self.decoder = decoder
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
+        self.rotary_emb_local = rotary_emb_local
         self.past_key_values = DynamicCache()
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
         # TODO: Generalize for other HF models
-        model_name_env = os.getenv("HF_MODEL")
-        if model_name_env is not None and "mistral" in model_name_env.lower():
-            position_embeddings = self.rotary_emb(x, x.shape[1])
-        else:
-            position_embeddings = self.rotary_emb(x, position_ids)
 
+        position_embeddings_global = self.rotary_emb(x, position_ids)
+        position_embeddings_local = self.rotary_emb_local(x, position_ids)
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
         result = self.decoder.forward(
             x,
-            position_embeddings_global=position_embeddings,
-            position_embeddings_local=position_embeddings,
+            position_embeddings_global=position_embeddings_global,
+            position_embeddings_local=position_embeddings_local,
             past_key_value=self.past_key_values,
             use_cache=True,
             position_ids=position_ids,
