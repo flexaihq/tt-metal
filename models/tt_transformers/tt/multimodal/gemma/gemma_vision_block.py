@@ -86,24 +86,18 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         bsz, in_channel, h, w = images.shape
 
         x = self.embeddings(images)
-
-        x = ttnn.to_torch(x)
         attention_mask = torch.zeros(bsz, 1, x.shape[1], x.shape[1])
-        attention_input = self.prepare_residual_tensor_prefill(
-            x,
-            force_replicated=True,
-        )
 
         tt_mask = ttnn.from_torch(
             attention_mask,
             device=self.mesh_device,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         x = self.encoder(
-            attention_input,
+            x,
             mask=tt_mask,
         )
 

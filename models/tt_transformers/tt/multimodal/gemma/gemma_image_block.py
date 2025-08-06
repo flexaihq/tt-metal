@@ -99,11 +99,15 @@ class TtGemmaImageTransformerBlock(LightweightModule):
         if self.gated:
             attn_out = ttnn.mul(attn_out, ttnn.tanh(self.gate_attn))
 
+        if self.num_devices > 1:
+            attn_out = ttnn.all_gather(attn_out, dim=3, num_links=1)
         res = ttnn.add(x_11SH, attn_out)
+
         mlp_out = self.mlp(self.ln_2(res))
         if self.gated:
             mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffn))
         out = ttnn.add(res, mlp_out)
+
         ttnn.deallocate(mlp_out)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(res)

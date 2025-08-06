@@ -258,11 +258,11 @@ class TtGemmaImageAttention(LightweightModule):
                 -1,
             ),
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name("wo_sharded"),
+            # cache_file_name=cache_name("wo_sharded"),
         )
 
         if bo_str in self.state_dict:
@@ -273,7 +273,7 @@ class TtGemmaImageAttention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.dtype,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("bo_sharded"),
+                # cache_file_name=cache_name("bo_sharded"),
             )
         else:
             self.bo = None
@@ -290,78 +290,47 @@ class TtGemmaImageAttention(LightweightModule):
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
-        if "gemma-3" in self.configuration.base_model_name:
-            q_heads_1QSD = ttnn.linear(
-                x_11SH,
-                self.wq,
-                bias=self.bq,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=None
-                if "gemma-3" in self.configuration.base_model_name
-                else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
-            )
+        q_heads_1QSD = ttnn.linear(
+            x_11SH,
+            self.wq,
+            bias=self.bq,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+            program_config=None
+            if "gemma-3" in self.configuration.base_model_name
+            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+        )
 
-            q_heads_1QSD = ttnn.transpose(ttnn.reshape(q_heads_1QSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
+        q_heads_1QSD = ttnn.transpose(ttnn.reshape(q_heads_1QSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
 
-            k_heads_1KSD = ttnn.linear(
-                x_11SH,
-                self.wk,
-                bias=self.bk,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=None
-                if "gemma-3" in self.configuration.base_model_name
-                else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
-            )
+        k_heads_1KSD = ttnn.linear(
+            x_11SH,
+            self.wk,
+            bias=self.bk,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+            program_config=None
+            if "gemma-3" in self.configuration.base_model_name
+            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+        )
 
-            k_heads_1KSD = ttnn.transpose(ttnn.reshape(k_heads_1KSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
+        k_heads_1KSD = ttnn.transpose(ttnn.reshape(k_heads_1KSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
 
-            v_heads_1VSD = ttnn.linear(
-                x_11SH,
-                self.wv,
-                bias=self.bv,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=None
-                if "gemma-3" in self.configuration.base_model_name
-                else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
-            )
-            v_heads_1VSD = ttnn.transpose(ttnn.reshape(v_heads_1VSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
+        v_heads_1VSD = ttnn.linear(
+            x_11SH,
+            self.wv,
+            bias=self.bv,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+            program_config=None
+            if "gemma-3" in self.configuration.base_model_name
+            else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
+        )
+        v_heads_1VSD = ttnn.transpose(ttnn.reshape(v_heads_1VSD, (1, seq_len, self.n_local_heads, -1)), 1, 2)
 
-        else:
-            xqkv_fused = ttnn.linear(
-                x_11SH,
-                self.wqkv,
-                bias=self.bqkv,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
-                program_config=None
-                if "gemma-3" in self.configuration.base_model_name
-                else self.model_config["IMAGE_ATTN_QKV_PROGCFG"](seq_len, MAX_MM_SEQ_LEN),
-            )
-
-            if seq_len > MAX_MM_SEQ_LEN:
-                xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
-
-            # split qkv into heads
-            (
-                q_heads_1QSD,
-                k_heads_1KSD,
-                v_heads_1VSD,
-            ) = ttnn.experimental.nlp_create_qkv_heads(
-                xqkv_fused,
-                num_heads=self.n_local_heads,
-                num_kv_heads=self.n_local_kv_heads,
-                transpose_k_heads=False,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-
-            ttnn.deallocate(xqkv_fused)
         # TODO: get this from model_config
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8), q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False
@@ -394,6 +363,10 @@ class TtGemmaImageAttention(LightweightModule):
         if seq_len > MAX_MM_SEQ_LEN:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
+        if self.num_devices > 1:
+            # self.bo = ttnn.all_gather(self.bo, dim=3, num_links=1)
+            attn_output_11SH = ttnn.all_gather(attn_output_11SH, dim=3, num_links=1)
+
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -409,12 +382,4 @@ class TtGemmaImageAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        # All reduce
-        if self.num_devices > 1:  # replace with reduce_scatter and all_gather
-            dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-            dense_out_reduced = ttnn.experimental.fast_reduce_nc(
-                dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
-            )
-            return dense_out_reduced
-        else:
-            return output_11SH
+        return output_11SH

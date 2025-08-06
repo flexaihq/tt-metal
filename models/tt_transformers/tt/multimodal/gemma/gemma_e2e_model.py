@@ -72,9 +72,10 @@ class TtGemmaModel(Transformer):
         tokens_embd = self.embd(tokens, self.embed_scale)
 
         vision_output = self.compute_vision_token(**kwargs)
-
-        tokens_embd = ttnn.to_torch(tokens_embd)
-        comp_vision_output = ttnn.to_torch(ttnn.from_device(vision_output))
+        tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+        comp_vision_output = ttnn.to_torch(
+            vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        )[: vision_output.shape[0], :]
 
         image_features = comp_vision_output.squeeze(0)
         special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
@@ -82,12 +83,8 @@ class TtGemmaModel(Transformer):
         image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
         tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
 
-        tokens_embd = ttnn.from_torch(
+        tokens_embd = self.args.prepare_residual_tensor_prefill(
             tokens_embd,
-            dtype=ttnn.bfloat16,
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
