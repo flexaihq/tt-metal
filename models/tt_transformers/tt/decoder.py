@@ -5,6 +5,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention
+from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
@@ -28,6 +29,8 @@ class TransformerBlock(LightweightModule):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
 
+        self.num_devices = args.num_devices
+        self.TG = self.num_devices == 32
         self.args = args
         self.hidden_size = args.dim
         self.n_heads = args.n_heads
@@ -192,7 +195,18 @@ class TransformerBlock(LightweightModule):
 
         hidden_states = self.ff_norm(attn_out, mode)
         if self.pre_ff_norm is not None:
-            hidden_states = ttnn.add(hidden_states, residual, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
+            hidden_states = tt_all_reduce(
+                hidden_states,
+                self.mesh_device,
+                cluster_axis=0,
+                dim=3,
+                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+                num_all_gather_links=self.args.num_all_gather_links,
+                topology=self.args.ccl_topology(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=self.args.ccl_dtype,
+            )
+            hidden_states = ttnn.add(residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
 
             residual = hidden_states
 
@@ -207,12 +221,24 @@ class TransformerBlock(LightweightModule):
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
         hidden_states = self.feed_forward.forward(hidden_states, mode)
+
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
-        if self.post_ff_norm is not None:
-            hidden_states = self.post_ff_norm(hidden_states, mode)
 
+        if self.post_ff_norm is not None:
+            hidden_states = self.post_ff_norm(hidden_states, mode)  # Gathered
+            hidden_states = tt_all_reduce(
+                hidden_states,
+                self.mesh_device,
+                cluster_axis=0,
+                dim=3,
+                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+                num_all_gather_links=self.args.num_all_gather_links,
+                topology=self.args.ccl_topology(),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=self.args.ccl_dtype,
+            )
         out = ttnn.add(
             residual,
             hidden_states,

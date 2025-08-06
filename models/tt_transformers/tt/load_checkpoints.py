@@ -391,8 +391,6 @@ def map_vision_hf_to_meta_keys(loaded_weights, head_dim):
     }
     text_weights = convert_hf_qkv_to_meta_format(text_weights, head_dim)
     # remapped_text = map_hf_to_meta_keys(text_weights, prefix="model.language_model.")
-    print("inside the vision")
-    print(text_weights.keys())
     remapped_text = map_hf_to_meta_keys(text_weights)
     return {**non_text_weights, **remapped_text}
 
