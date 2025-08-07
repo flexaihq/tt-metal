@@ -213,6 +213,12 @@ def convert_meta_to_hf(state_dict, head_dim):
     return state_dict
 
 
+def convert_vision_meta_to_hf(state_dict, head_dim):
+    # state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
+    state_dict = map_vision_meta_to_hf_keys(state_dict)
+    return state_dict
+
+
 def replace_keys(state_dict, replacements):
     """
     Replacements are in the form (pattern, replacement).
@@ -238,6 +244,7 @@ def map_hf_to_meta_keys(loaded_weights):
     """
     replacements = [
         ("^emb.weight", "weight"),
+        ("model.language_model.", ""),
         ("language.model.", ""),
         ("model.", ""),
         ("embed_tokens", "tok_embeddings"),
