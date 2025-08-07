@@ -1228,9 +1228,10 @@ class ModelArgs:
 
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
-            self.VISION_MAX_MM_SEQ = (
-                self.vision_chunk_ntok if "gemma-3" in self.base_model_name else nearest_32(self.vision_chunk_ntok)
-            )
+            if self.is_vision():
+                self.VISION_MAX_MM_SEQ = (
+                    self.vision_chunk_ntok if "gemma-3" in self.base_model_name else nearest_32(self.vision_chunk_ntok)
+                )
 
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
@@ -1501,7 +1502,7 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", 896)
+        self.vision_chunk_size = config.get("vision_chunk_size", -1)
         self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
         self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
 
@@ -1656,9 +1657,12 @@ class ModelArgs:
                 merged_text_config = merge_text_config(config)
                 self._set_params_from_dict(merged_text_config, is_hf=True)
 
-                if "vision_config" in config:
-                    merged_vision_config = merge_vision_config(config)
-                    self._set_vision_params(merged_vision_config)
+                if "gemma-3-4b-it" in self.base_model_name:
+                    self._set_vision_params(config["vision_config"])
+                else:
+                    if "vision_config" in config:
+                        merged_vision_config = merge_vision_config(config)
+                        self._set_vision_params(merged_vision_config)
             else:
                 self._set_params_from_dict(config, is_hf=True)
 
@@ -1667,7 +1671,7 @@ class ModelArgs:
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
-        self._set_params_from_dict(config, is_hf=True)
+            self._set_params_from_dict(config, is_hf=True)
 
     def __repr__(self):
         return f"""ModelArgs(
