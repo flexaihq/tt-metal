@@ -40,6 +40,7 @@ class Transformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
+        self.simplified_rms = True if self.args.base_model_name == "Qwen2.5-VL-7B" else False
 
         self.embd = Embedding(
             mesh_device=mesh_device,
@@ -90,6 +91,7 @@ class Transformer(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                simplified_rms=self.simplified_rms,
             ),
             args,
             args.is_galaxy,
