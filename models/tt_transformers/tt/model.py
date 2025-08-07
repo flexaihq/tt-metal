@@ -360,6 +360,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        **kwargs,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config

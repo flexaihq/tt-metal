@@ -447,3 +447,26 @@ class RotarySetup(LightweightModule):
         if return_rot_idxs:
             return [cos, sin], rot_idxs
         return [cos, sin]
+
+
+class TTQwen2_5_VisionRotaryEmbedding:
+    def __init__(self, device, dim: int, theta: float = 10000.0, mode="decode"):
+        self.dim = dim
+        self.theta = theta
+        self.device = device
+
+        arange_indices = ttnn.arange(start=0, end=dim, step=2, device=device)
+        arange_indices = ttnn.to_layout(arange_indices, ttnn.TILE_LAYOUT)
+        exponent = ttnn.div(arange_indices, dim)
+        pow_result = ttnn.pow(theta, exponent)
+        recip = ttnn.reciprocal(pow_result)
+        self.inv_freq = ttnn.multiply(recip, 1.0)
+
+    def __call__(self, seqlen: int):
+        tt_seq = ttnn.arange(end=seqlen, device=self.device)
+        tt_seq = ttnn.reshape(tt_seq, [1, 1, 1, tt_seq.shape[0]])
+        tt_freq = ttnn.reshape(self.inv_freq, [1, 1, 1, self.inv_freq.shape[0]])
+        tt_freqs = ttnn.outer(tt_seq, tt_freq)
+        tt_freqs = ttnn.reshape(tt_freqs, [tt_freqs.shape[2], tt_freqs.shape[3]])
+
+        return tt_freqs

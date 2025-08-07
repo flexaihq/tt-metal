@@ -32,7 +32,6 @@ from models.tt_transformers.tt.load_checkpoints import (
     load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
-    standardize_hf_keys_qwen25_vl,
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
@@ -1733,23 +1732,18 @@ class ModelArgs:
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
-                # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-                if "Qwen2.5-VL" in self.model_name:
-                    from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                        Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                    )
+                from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
 
-                    print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
+                if "Qwen2.5-VL-7B" in self.model_name:
+                    model = AutoModelForImageTextToText.from_pretrained(self.CKPT_DIR, torch_dtype="auto")
                 else:
-                    from transformers import AutoModelForCausalLM
-
-                model = AutoModelForCausalLM.from_pretrained(
-                    self.CKPT_DIR,
-                    torch_dtype="auto"
-                    # Note that the default setting is torch.dtype.float32, but model weights are
-                    # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                    # unnecessary cast.
-                )
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR,
+                        torch_dtype="auto"
+                        # Note that the default setting is torch.dtype.float32, but model weights are
+                        # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                        # unnecessary cast.
+                    )
                 if self.cache_hf_flag:
                     self.cached_hf_model = model
                 state_dict = model.state_dict()
@@ -1761,7 +1755,7 @@ class ModelArgs:
                 state_dict = standardize_hf_keys_qwen25_vl(state_dict)
             else:
                 state_dict = standardize_hf_keys(state_dict)
-            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2104,6 +2098,7 @@ class ModelArgs:
                 "Qwen2.5-1.5B": "Qwen/Qwen2.5-1.5B-Instruct",
                 "Qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",
                 "Qwen2.5-7B": "Qwen/Qwen2.5-7B-Instruct",
+                "Qwen2.5-VL-7B": "Qwen/Qwen2.5-VL-7B-Instruct",
                 "Qwen2.5-14B": "Qwen/Qwen2.5-14B-Instruct",
                 "Qwen2.5-32B": "Qwen/Qwen2.5-32B-Instruct",
                 "Qwen2.5-72B": "Qwen/Qwen2.5-72B-Instruct",
