@@ -66,6 +66,25 @@ def test_pixtral_image_block(batch, num_chunks, mesh_device, use_program_cache, 
     sin = torch.zeros((1, T, head_dim))
 
     positional_embedding = (cos, sin)
+    # positional_embedding = torch.load("real_inputs/mistral_image_block/mistral_image_block/layer_position_embeddings12.pt")
+    cos, sin = positional_embedding
+    cos_t = ttnn.from_torch(
+        cos,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    sin_t = ttnn.from_torch(
+        sin,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
     attention_input = model_args.prepare_residual_tensor_prefill(
         pt_attention_input,
         force_replicated=True,
@@ -79,7 +98,7 @@ def test_pixtral_image_block(batch, num_chunks, mesh_device, use_program_cache, 
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    tt_out = tt_model(attention_input, mask=tt_mask)
+    tt_out = tt_model(attention_input, position_embeddings=(cos_t, sin_t), mask=tt_mask)
     reference_output = reference_model(
         pt_attention_input, attention_mask=attention_mask, position_embeddings=positional_embedding
     )[0]
