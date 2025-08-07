@@ -679,30 +679,30 @@ def replace_keys(state_dict, replacements):
     return state_dict
 
 
-def map_hf_to_meta_keys(loaded_weights):
-    """
-    Map Hugging Face checkpoint keys to Meta checkpoint keys.
-    You can use this to support other models by adding more mappings.
-    See replace_keys for more details on the format of replacements.
-    """
-    replacements = [
-        ("^emb.weight", "weight"),
-        ("model.", ""),
-        ("embed_tokens", "tok_embeddings"),
-        ("lm_head", "output"),
-        ("input_layernorm", "attention_norm"),
-        ("post_attention_layernorm", "ffn_norm"),
-        ("self_attn", "attention"),
-        ("mlp", "feed_forward"),
-        ("gate_proj", "w1"),
-        ("down_proj", "w2"),
-        ("up_proj", "w3"),
-        ("q_proj", "wq"),
-        ("k_proj", "wk"),
-        ("v_proj", "wv"),
-        ("o_proj", "wo"),
-    ]
-    return replace_keys(loaded_weights, replacements)
+# def map_hf_to_meta_keys(loaded_weights):
+#     """
+#     Map Hugging Face checkpoint keys to Meta checkpoint keys.
+#     You can use this to support other models by adding more mappings.
+#     See replace_keys for more details on the format of replacements.
+#     """
+#     replacements = [
+#         ("^emb.weight", "weight"),
+#         ("model.", ""),
+#         ("embed_tokens", "tok_embeddings"),
+#         ("lm_head", "output"),
+#         ("input_layernorm", "attention_norm"),
+#         ("post_attention_layernorm", "ffn_norm"),
+#         ("self_attn", "attention"),
+#         ("mlp", "feed_forward"),
+#         ("gate_proj", "w1"),
+#         ("down_proj", "w2"),
+#         ("up_proj", "w3"),
+#         ("q_proj", "wq"),
+#         ("k_proj", "wk"),
+#         ("v_proj", "wv"),
+#         ("o_proj", "wo"),
+#     ]
+#     return replace_keys(loaded_weights, replacements)
 
 
 def convert_vision_meta_to_hf(state_dict, head_dim):

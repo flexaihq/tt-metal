@@ -1488,7 +1488,7 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", , 896)
+        self.vision_chunk_size = config.get("vision_chunk_size", 896)
         self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
         self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
 
@@ -1778,6 +1778,7 @@ class ModelArgs:
                     print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
                 elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
                     from transformers import Mistral3ForConditionalGeneration as AutoModelForCausalLM
+
                     print("Loading Mistral-Small-3.1-24B-Instruct-2503 model: ", AutoModelForCausalLM)
                 else:
                     from transformers import AutoModelForCausalLM
@@ -2167,8 +2168,10 @@ class ModelArgs:
                     "mistralai/Mistral-Small-3.1-24B-Instruct-2503", trust_remote_code=True
                 )
                 logger.info("Manually setting Mistral instruct-style chat template on the tokenizer.")
-                print("################## Tokenizer chat template loaded #####################:", tokenizer.chat_template)
-                
+                print(
+                    "################## Tokenizer chat template loaded #####################:", tokenizer.chat_template
+                )
+
                 mistral_template = """{% for message in messages %}
                                     {% if message['role'] == 'system' %}
                                     <|system|>
@@ -2225,7 +2228,9 @@ class ModelArgs:
                             tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path)
                             logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                         except Exception as fallback_e:
-                            logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
+                            logger.error(
+                                f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}"
+                            )
                             raise fallback_e
                     else:
                         logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
@@ -2280,7 +2285,7 @@ class ModelArgs:
                     Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
                 )
             elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                    from transformers import Mistral3ForConditionalGeneration as AutoModelForCausalLM
+                from transformers import Mistral3ForConditionalGeneration as AutoModelForCausalLM
             else:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
