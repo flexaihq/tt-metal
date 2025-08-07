@@ -386,17 +386,23 @@ class Transformer(LightweightModule):
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
-            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+            sliced_x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+            ttnn.deallocate(x)
+            x = sliced_x
 
         # Output norm
-        x = self.norm(x, mode=mode)
+        out_norm = self.norm(x, mode=mode)
 
         if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
-            x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
+            new_out_norm = ttnn.interleaved_to_sharded(out_norm, self.model_config["LM_HEAD_INPUT_MEMCFG"])
+            ttnn.deallocate(out_norm)
+            out_norm = new_out_norm
 
-        x = self.lm_head(x)
+        logits = self.lm_head(out_norm)
+        ttnn.deallocate(out_norm)
 
         if mode == "prefill":
-            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return x
+            logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT)
+            logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        return logits
