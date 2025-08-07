@@ -2258,7 +2258,14 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            rotary_emb = model.model.rotary_emb
+
+            if "gemma-3" in self.model_name:
+                rotary_emb_local = model.model.rotary_emb_local
+                wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
+            else:
+                wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb)
+
             return wrapper
 
     def reference_attention(self):
@@ -2477,7 +2484,6 @@ class HfGemmaDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        # TODO: Generalize for other HF models
 
         position_embeddings_global = self.rotary_emb(x, position_ids)
         position_embeddings_local = self.rotary_emb_local(x, position_ids)

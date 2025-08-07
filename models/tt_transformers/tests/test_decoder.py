@@ -173,11 +173,24 @@ def test_decoder_inference(
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
 
+        if model_args.rope_local_theta is not None:
+            rope_setup_local = RotarySetup(
+                mesh_device,
+                model_args.max_batch_size,
+                model_args.head_dim,
+                model_args.max_seq_len,
+                model_args.rope_local_theta,
+                model_args.rope_scaling,
+            )
+            rot_mats_local = rope_setup_local.get_rot_mats(current_pos)
+        else:
+            rot_mats_local = None
+
         # Run TT model
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=[rot_mats, rot_mats],
+            rot_mats=[rot_mats, rot_mats_local],
             mode="decode",
             page_table=page_table_tt,
         )
