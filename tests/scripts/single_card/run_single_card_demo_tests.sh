@@ -34,6 +34,9 @@ run_qwen25_vl_func() {
   qwen25_vl_3b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-3B-Instruct/
   # todo)) Qwen2.5-VL-7B-Instruct
 
+  # Qwen2.5-VL-7B-Instruct
+  qwen25_vl_7b=Qwen/Qwen2.5-VL-7B-Instruct
+
   # simple generation-accuracy tests for qwen25_vl_3b
   MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
   echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
@@ -43,6 +46,9 @@ run_qwen25_vl_func() {
     MESH_DEVICE=N300 HF_MODEL=$qwen_dir pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
     echo "LOG_METAL: Tests for $qwen_dir on N300 completed"
   done
+
+  # simple generation-accuracy tests for qwen25_vl_7b
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_7b pytest models/tt_transformers/demo/simple_vision_demo.py --timeout 600 || fail=1
 
   if [[ $fail -ne 0 ]]; then
     exit 1
