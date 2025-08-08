@@ -2136,9 +2136,6 @@ class ModelArgs:
                     "mistralai/Mistral-Small-3.1-24B-Instruct-2503", trust_remote_code=True
                 )
                 logger.info("Manually setting Mistral instruct-style chat template on the tokenizer.")
-                print(
-                    "################## Tokenizer chat template loaded #####################:", tokenizer.chat_template
-                )
 
                 mistral_template = """{% for message in messages %}
                                     {% if message['role'] == 'system' %}

@@ -22,63 +22,9 @@ from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVi
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 from models.tt_transformers.tt.model_config import ModelArgs
-from transformers import AutoProcessor, AutoModelForVision2Seq
+from transformers import AutoProcessor
 
 import re
-
-
-def run_reference_demo_pipeline(messages, model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503"):
-    """
-    Run Hugging Face reference demo model (Vision-Text pipeline) using given messages.
-    """
-    logger.info("Running reference HF vision-text model...")
-
-    processor = AutoProcessor.from_pretrained(model_id)
-    model = AutoModelForVision2Seq.from_pretrained(
-        model_id,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-    )
-
-    model.eval()
-
-    # Apply chat template
-    prompt_text = processor.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True, padding=True, padding_side="left"
-    )
-
-    # Extract images (already loaded)
-    image_inputs = []
-    for msg in messages:
-        for item in msg["content"]:
-            if item["type"] == "image":
-                image_inputs.append(item["image"])
-
-    # Tokenize and move to model device
-    inputs = processor(
-        text=[prompt_text],
-        images=image_inputs,
-        return_tensors="pt",
-    ).to(model.device, dtype=torch.bfloat16)
-
-    with torch.no_grad():
-        generated_ids = model.generate(
-            **inputs,
-            max_new_tokens=100,
-            temperature=0.0,
-            top_p=0.9,
-            do_sample=False,
-            pad_token_id=model.config.pad_token_id,
-        )
-
-    # Decode
-    output = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
-    logger.info(f"HF reference model output: {output}")
-
-    chat = parse_chat_output(output)
-    display_chat(logger, chat)
-
-    return output
 
 
 def parse_chat_output(text):
@@ -122,7 +68,7 @@ def setup_vision_prompts_and_tokenizer(model_args, instruct):
             "content": [
                 {"type": "image", "image": image},
                 # "image": "https://raw.githubusercontent.com/yavuzceliker/sample-images/refs/heads/main/images/image-1.jpg",
-                {"type": "text", "text": "Describe this image in detail."},
+                {"type": "text", "text": "Describe this image in detail in 1000 words."},
             ],
         }
     ]
@@ -262,26 +208,6 @@ def run_generation_exactly_like_test_end2end(
     prefilled_token_decoded_res = model_args.tokenizer.decode(prefilled_token[0].item())
     logger.info(f"prefilled_token_decoded_res: {prefilled_token_decoded_res}")
 
-    logger.info(f"Prefilled token: {prefilled_token}")
-
-    import torch.nn.functional as F
-
-    logger.info(f"Encoded prompt: {encoded_prompts[0]}")
-    logger.info(f"Decoded prompt: {model_args.tokenizer.decode(encoded_prompts[0])}")
-
-    # logits: [1, 1, vocab_size]
-    last_logits = logits[0, -1]  # shape: [vocab_size]
-    probs = F.softmax(last_logits, dim=-1)
-
-    top_k = 5
-    topk_probs, topk_indices = torch.topk(probs, k=top_k)
-
-    topk_tokens = [model_args.tokenizer.decode([idx.item()]) for idx in topk_indices]
-
-    logger.info("🔍 Top-5 predicted tokens (with probabilities):")
-    for i in range(top_k):
-        logger.info(f"{i+1}. Token: '{topk_tokens[i]}' (ID={topk_indices[i].item()}), P={topk_probs[i].item():.4f}")
-
     all_outputs = [encoded_prompts[0][: prefill_lens[0]]]
     all_outputs[0].append(int(prefilled_token[0].item()))
 
@@ -339,19 +265,10 @@ def run_generation_exactly_like_test_end2end(
             logger.warning(f"Detected exact repetition of token {all_outputs[0][-1]} five times in a row. Stopping.")
             break
 
-        # Final response (exactly like test_end2end.py)
-        response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
-        logger.info(f"📝 Each iteration Generated Response:\n{response}")
-        logger.info(f"📝 Each iteration Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
-        chat = parse_chat_output(response)
-        display_chat(logger, chat)
-
-        logger.info(f" Each iteration Generated {len(results)} tokens successfully")
-
     # Final response (exactly like test_end2end.py)
     response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
-    logger.info(f"📝 Final Generated Response:\n{response}")
-    logger.info(f"📝 Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
+    logger.info(f"Final Generated Response:\n{response}")
+    logger.info(f"Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
     chat = parse_chat_output(response)
     display_chat(logger, chat)
 
@@ -458,9 +375,6 @@ def test_e2e_vision_text_pipeline(
 
     # Setup vision prompts and tokenizer
     messages, tokenizer = setup_vision_prompts_and_tokenizer(model_args, instruct)
-
-    # logger.info("Running reference HF vision-text model using messages..... ")
-    # hf_output = run_reference_demo_pipeline(messages)
 
     # Process real vision inputs from images
     processed_inputs = process_real_vision_inputs(messages, model_args)
