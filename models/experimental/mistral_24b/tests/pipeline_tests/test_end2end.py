@@ -120,9 +120,9 @@ def setup_vision_prompts_and_tokenizer(model_args, instruct):
         {
             "role": "user",
             "content": [
-                # {"type": "image", "image": image},
+                {"type": "image", "image": image},
                 # "image": "https://raw.githubusercontent.com/yavuzceliker/sample-images/refs/heads/main/images/image-1.jpg",
-                {"type": "text", "text": "The capital of France is "},
+                {"type": "text", "text": "Describe this image in detail."},
             ],
         }
     ]
@@ -153,16 +153,15 @@ def process_real_vision_inputs(messages, model_args):
         messages, tokenize=False, add_generation_prompt=True, padding=True, padding_side="left"
     )
 
-    # image_inputs, video_inputs = process_vision_info(messages)
-    image_inputs, video_inputs = None, None
+    image_inputs, video_inputs = process_vision_info(messages)
 
     encoded = processor(
         text=[text], images=image_inputs, videos=video_inputs, return_tensors="pt", return_dict=True
     ).to("cpu", dtype=torch.bfloat16)
-    input_ids = encoded["input_ids"] if "input_ids" in encoded else None
-    pixel_values = encoded["pixel_values"] if "pixel_values" in encoded else None
-    attention_mask = encoded["attention_mask"] if "attention_mask" in encoded else None
-    image_sizes = encoded["image_sizes"] if "image_sizes" in encoded else None
+    input_ids = encoded["input_ids"]
+    pixel_values = encoded["pixel_values"]
+    attention_mask = encoded["attention_mask"]
+    image_sizes = encoded["image_sizes"]
 
     return {
         "input_ids": input_ids,
@@ -508,7 +507,7 @@ def test_e2e_vision_text_pipeline(
     # Run generation following EXACT test_end2end.py pattern
     logger.info("Running generation following EXACT test_end2end.py pattern...")
     results = run_generation_exactly_like_test_end2end(
-        vision_model, text_model, processed_inputs, model_args, page_table, paged_attention_config, max_gen_len=100
+        vision_model, text_model, processed_inputs, model_args, page_table, paged_attention_config, max_gen_len=600
     )
 
     # Validate results

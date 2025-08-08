@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Â© 2024 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -27,7 +27,6 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_meta_to_hf,
-    convert_vision_hf_to_meta,
     convert_vision_meta_to_hf,
     load_hf_state_dict,
     load_meta_state_dict,
@@ -142,7 +141,7 @@ class ModelOptimizations:
         """Configuration optimized for performance
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
-        base_model_name = model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
+        base_model_name = get_base_model_name(model_name)
         if base_model_name == "Qwen2.5-7B":
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
@@ -565,8 +564,6 @@ class ModelArgs:
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "gemma-3-1b-it": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
-                "gemma-3-4b-it": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
@@ -1580,20 +1577,6 @@ class ModelArgs:
             else None
         )
 
-    # def _set_vision_params(self, vision_config):
-    #     self.vision_dim = vision_config.get("hidden_size", 1280)
-    #     self.vision_mlp_ratio = vision_config.get("intermediate_size", self.vision_dim * 4) // self.vision_dim
-    #     self.vision_hidden_dim = vision_config.get("intermediate_size", self.vision_dim * self.vision_mlp_ratio)
-    #     self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
-    #     self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
-    #     self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
-    #     self.vision_patch_size = vision_config.get("patch_size", 14)
-    #     self.vision_in_channels = vision_config.get("num_channels", 3)
-    #     self.vision_act_layer = ttnn.UnaryOpType.GELU  # or read from config if variable
-    #     self.vision_dropout = vision_config.get("attention_dropout", 0.0)
-    #     self.vision_max_num_tiles = 4
-    #     self.vision_n_global_layers = 8
-
     def _set_vision_params(self, vision_config):
         self.vision_image_size = vision_config.get("image_size", 1540)
         self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
@@ -1605,10 +1588,10 @@ class ModelArgs:
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
         self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
-        self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
+        self.vision_attn_n_heads = vision_config.get("num_attention_heads") or vision_config.get("num_heads") or 16
         self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
 
-        self.vision_n_layers = vision_config.get("num_hidden_layers", 27)
+        self.vision_n_layers = vision_config.get("num_hidden_layers") or vision_config.get("depth") or 27
         self.vision_patch_size = vision_config.get("patch_size", 14)
         self.vision_in_channels = vision_config.get("num_channels", 3)
 
@@ -1667,9 +1650,12 @@ class ModelArgs:
                 merged_text_config = merge_text_config(config)
                 self._set_params_from_dict(merged_text_config, is_hf=True)
 
-                if "vision_config" in config:
-                    merged_vision_config = merge_vision_config(config)
-                    self._set_vision_params(merged_vision_config)
+                if "Mistral" in self.base_model_name:
+                    self._set_vision_params(config["vision_config"])
+                else:
+                    if "vision_config" in config:
+                        merged_vision_config = merge_vision_config(config)
+                        self._set_vision_params(merged_vision_config)
             else:
                 self._set_params_from_dict(config, is_hf=True)
 
@@ -1702,21 +1688,10 @@ class ModelArgs:
     def is_vision(self):
         return self.vision_chunk_size > 0
 
-    def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        text_prefix = self.state_dict_text_prefix
-        if "Qwen2.5-VL" in self.model_name:
-            if is_vision:
-                base_prefix = "visual."
-            else:
-                base_prefix = ""
-        elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-            if is_vision:
-                base_prefix = "vision_tower."  # Handle TODO
-            else:
-                base_prefix = "language_model."
-        else:
-            base_prefix = "text_model." if not is_vision else ""
-
+    def get_state_dict_prefix(self, module_name, layer_num):
+        text_prefix = (
+            "text_model." if self.is_vision() and not "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name else ""
+        )
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
         module_map = {
             "MLP": "feed_forward",
@@ -1724,14 +1699,7 @@ class ModelArgs:
             "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
         }
-        vision_module_map = {
-            "MLP": "mlp.",
-            "Attention": "self_attn.",
-            "TransformerBlock": "",
-            "": "",
-        }
-        module_map = vision_module_map if is_vision else module_map
-        return base_prefix + layer_prefix + module_map[module_name]
+        return text_prefix + layer_prefix + module_map[module_name]
 
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
@@ -1803,7 +1771,7 @@ class ModelArgs:
                 state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
             else:
                 state_dict = standardize_hf_keys(state_dict)
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2304,7 +2272,7 @@ class ModelArgs:
                     model = self.cached_hf_model
                 else:
                     # No caching - load fresh each time
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, torch_dtype=torch.bfloat16)
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model
