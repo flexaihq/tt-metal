@@ -63,6 +63,6 @@ class TTQwen2_5_VisionPatchEmbed:
         output = ttnn.matmul(x_flattened, self.weight, compute_kernel_config=self.compute_kernel_config)
 
         if self.args.num_devices > 1:
-            output = ttnn.all_gather(output, dim=1, num_links=1)
-
+            output = ttnn.all_gather(ttnn.reshape(output, (1, 1, output.shape[0], -1)), dim=3, num_links=1)
+            output = ttnn.reshape(output, (output.shape[2], -1))
         return output
