@@ -109,6 +109,7 @@ class MistralVisionTower(LightweightModule):
         """
         input_tensor shape: (B, C, H, W)
         """
+        # torch input tensor and results are replicated across the mesh
         patch_embeds = self.patch_conv(input_tensor)
         patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
         height, width = image_sizes[0]
@@ -136,6 +137,7 @@ class MistralVisionTower(LightweightModule):
 
         # ln_pre RMS Norm
         mode = "prefill"  # if self.max_seq_len <= 32 else "prefill"
+        # Both Input and output to ln_pre is replicated across the mesh
         patch_embeds = self.ln_pre(patch_embeds, mode=mode)
 
         # # positional embeddings
@@ -149,6 +151,7 @@ class MistralVisionTower(LightweightModule):
             : position_ids.shape[-1]
         ]
 
+        # Input to patch_positional_embedding is a torch and output replicated across the mesh
         position_embeddings = self.patch_positional_embedding.get_rot_mats(torch_position_ids)
 
         attention_mask = generate_block_attention_mask_tt(
@@ -156,6 +159,7 @@ class MistralVisionTower(LightweightModule):
         )
 
         patch_embeds = ttnn.unsqueeze(patch_embeds, 0)
+        # out is distributed across the mesh
         out = self.transformer(patch_embeds, mask=attention_mask, position_embeddings=position_embeddings)
         # deallocate position_embeddings
         ttnn.deallocate(position_embeddings[0])

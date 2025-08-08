@@ -412,7 +412,7 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (1024,),  # Use smaller seq_len like test_end2end.py to avoid memory issues
+    (2048,),  # Use smaller seq_len like test_end2end.py to avoid memory issues
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -430,7 +430,6 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
     ],
     indirect=True,
 )
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 1584864, "trace_region_size": 0}], indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 def test_e2e_vision_text_pipeline(
     weights,
@@ -507,7 +506,7 @@ def test_e2e_vision_text_pipeline(
     # Run generation following EXACT test_end2end.py pattern
     logger.info("Running generation following EXACT test_end2end.py pattern...")
     results = run_generation_exactly_like_test_end2end(
-        vision_model, text_model, processed_inputs, model_args, page_table, paged_attention_config, max_gen_len=600
+        vision_model, text_model, processed_inputs, model_args, page_table, paged_attention_config, max_gen_len=1024
     )
 
     # Validate results
