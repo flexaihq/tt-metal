@@ -86,23 +86,18 @@ def position_ids_in_meshgrid_tt(tt_patch_embeds_list, max_width, device):
     for tt_patch in tt_patch_embeds_list:
         shape = tt_patch.shape
         height, width = shape[-2], shape[-1]
-        tt_width = ttnn.arange(width, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_height = ttnn.arange(height, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        X = ttnn.unsqueeze(tt_height, 1)
-        Y = ttnn.unsqueeze(tt_width, 0)
-
-        # ======== device tensor ========
-        X_device = ttnn.to_device(X, device)
-        Y_device = ttnn.to_device(Y, device)
-
-        X = ttnn.expand(X_device, [height, width])
-        Y = ttnn.expand(Y_device, [height, width])
-
-        h_grid, v_grid = ttnn.chunk(ttnn.reshape(ttnn.stack([X, Y], dim=-1), (-1, 2)), 2, dim=-1)
+        mesh = torch.meshgrid(torch.arange(height), torch.arange(width), indexing="ij")
+        h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
         ids = h_grid * max_width + v_grid
 
-        position_ids_tt.append(ids[:, 0])
+        tt_ids = ttnn.from_torch(
+            ids,
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        position_ids_tt.append(tt_ids[:, 0])
     return ttnn.concat(position_ids_tt, dim=0)
 
 
