@@ -245,6 +245,19 @@ def test_tt_model_acc(
             theta=model_args.rope_theta,
             rope_scaling=model_args.rope_scaling,
         )
+
+        if model_args.rope_local_theta is not None:
+            # If local theta is set, use it to compute the local rope matrices
+            rot_mats_local = get_rot_mats(
+                head_dim=model_args.head_dim,
+                device=mesh_device,
+                seq_len=prefill_lens[0],
+                theta=model_args.rope_local_theta,
+                rope_scaling=None,
+            )
+        else:
+            rot_mats_local = None
+
         prefill_input = model_args.prepare_residual_tensor_prefill(
             pt_prefill_input[batch_id],
         )
@@ -252,7 +265,7 @@ def test_tt_model_acc(
         tt_out = tt_model(
             prefill_input,
             current_pos=None,
-            rot_mats=rot_mats_prefill,
+            rot_mats=[rot_mats_prefill, rot_mats_local],
             user_id=batch_id,
             mode="prefill",
             page_table=page_table_tt,
@@ -280,7 +293,7 @@ def test_tt_model_acc(
 
     # Get cos/sin matrices for the current position of each user
     rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
-
+    rot_mats_local = None if tt_model.rope_setup_local is None else tt_model.rope_setup.get_rot_mats(current_pos)
     # Print table header
     if use_reference_file:
         logger.info(f"{'Progress':<15}{'Correct':<8}{'True':<15}{'Actual':<15}{'Top 5 Predictions':<75}")
@@ -310,7 +323,7 @@ def test_tt_model_acc(
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=rot_mats,
+            rot_mats=[rot_mats, rot_mats_local],
             mode="decode",
             page_table=page_table_tt,
         )
@@ -351,7 +364,9 @@ def test_tt_model_acc(
         # Update rot_mats for next iteration
         current_pos += 1
         rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
-
+        rot_mats_local = (
+            tt_model.rope_setup_local.get_rot_mats(current_pos) if tt_model.rope_setup_local is not None else None
+        )
         # Modify the accuracy checking section when using reference text
         if not use_reference_file:
             # Get probabilities from model output

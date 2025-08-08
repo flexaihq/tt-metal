@@ -480,12 +480,14 @@ def test_multimodal_demo_text(
             "N300_Llama-3.2-11B": 23.5,
             "T3K_Llama-3.2-11B": 21.5,
             "T3K_Llama-3.2-90B": 3,
+            "N300_gemma-3-4b": 390,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s_u = {
             "N300_Llama-3.2-11B": 21.5,
             "T3K_Llama-3.2-11B": 37,
             "T3K_Llama-3.2-90B": 6,
+            "N300_gemma-3-4b": 24,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s = target_decode_tok_s_u * max_batch_size
