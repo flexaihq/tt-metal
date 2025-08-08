@@ -12,7 +12,6 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 import ttnn
-from ttnn import ConcatMeshToTensor
 
 
 class HostEmbedding(torch.nn.Module):
@@ -81,48 +80,29 @@ def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
     else:
         raise ValueError(f"Unexpected RoPE scaling type: {rope_scaling_type}")
 
-def generate_block_attention_mask_tt(patch_embeds_list, tensor, tt_device):
-    tensor = ttnn.to_torch(tensor, mesh_composer=ConcatMeshToTensor(tt_device, dim=0))
-    device = tensor.device
-    dtype = tensor.dtype
-    seq_len = tensor.shape[-2]
-    d_min = torch.finfo(dtype).min
-    causal_mask = torch.full((seq_len, seq_len), fill_value=d_min, dtype=dtype, device=device)
-
-    block_end_idx = torch.tensor(patch_embeds_list).cumsum(-1)
-    block_start_idx = torch.tensor([0] + patch_embeds_list[:-1]).cumsum(-1)
-    for start, end in zip(block_start_idx, block_end_idx):
-        causal_mask[start:end, start:end] = 0
-
-    causal_mask = causal_mask[None, None, :, :].expand(tensor.shape[0], 1, -1, -1)
-
-    causal_mask_tt = ttnn.from_torch(
-        causal_mask,
-        device=tt_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    return causal_mask_tt
-
 
 def position_ids_in_meshgrid_tt(tt_patch_embeds_list, max_width, device):
     position_ids_tt = []
     for tt_patch in tt_patch_embeds_list:
         shape = tt_patch.shape
         height, width = shape[-2], shape[-1]
-        mesh = torch.meshgrid(torch.arange(height), torch.arange(width), indexing="ij")
-        h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
+        tt_width = ttnn.arange(width, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        tt_height = ttnn.arange(height, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        X = ttnn.unsqueeze(tt_height, 1)
+        Y = ttnn.unsqueeze(tt_width, 0)
+
+        # ======== device tensor ========
+        X_device = ttnn.to_device(X, device)
+        Y_device = ttnn.to_device(Y, device)
+
+        X = ttnn.expand(X_device, [height, width])
+        Y = ttnn.expand(Y_device, [height, width])
+
+        h_grid, v_grid = ttnn.chunk(ttnn.reshape(ttnn.stack([X, Y], dim=-1), (-1, 2)), 2, dim=-1)
         ids = h_grid * max_width + v_grid
 
-        tt_ids = ttnn.from_torch(
-            ids,
-            device=device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        position_ids_tt.append(tt_ids[:, 0])
+        position_ids_tt.append(ids[:, 0])
     return ttnn.concat(position_ids_tt, dim=0)
 
 

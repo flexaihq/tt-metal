@@ -6,7 +6,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 
-from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention as TtLlamaImageAttention
+from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention
 from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
 
 
@@ -38,7 +38,7 @@ class TtPixtralImageTransformerBlock(LightweightModule):
             sharded_output_config=configuration.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         )
 
-        self.attention = TtLlamaImageAttention(
+        self.attention = TtMistralImageAttention(
             mesh_device,
             state_dict,
             state_dict_prefix=f"{state_dict_prefix}attention.",
