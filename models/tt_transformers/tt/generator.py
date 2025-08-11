@@ -624,8 +624,6 @@ class Generator:
                 kv_cache=model_kv_cache,
                 cross_page_table=user_cross_page_table,
                 model_id=model_id,
-                image_grid_thw=kwargs["image_grid_thw"][idx] if kwargs.get("image_grid_thw") else None,
-                input_ids=kwargs["input_ids"][idx] if kwargs.get("input_ids") else None,
             )
 
             if xattn_caches is not None:
