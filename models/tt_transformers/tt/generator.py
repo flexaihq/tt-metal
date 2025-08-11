@@ -605,11 +605,6 @@ class Generator:
             model_kv_cache = kv_cache[model_id] if kv_cache is not None else None
             model_xattn_cache = xattn_caches[model_id] if xattn_caches is not None else None
 
-            # prefill_seq_len = get_padded_prefill_len(seq_len)
-            # tokens = torch.cat(
-            #     [tokens[idx : idx + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
-            # )
-
             (
                 model_xattn_cache,
                 prefill_cross_attention_masks,
