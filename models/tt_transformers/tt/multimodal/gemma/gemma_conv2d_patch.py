@@ -1,5 +1,4 @@
 """
-source: models/tt_transformers/tt/multimodal/llama_conv2d_patch.py
 This is the Conv2dPath of Gemma-3-4b-it
 We have reused the exisiting Conv2dPath of TtLlamaConv2dPath with few modifications.
 We have added a check for weight to convert 4D to 2D
@@ -118,5 +117,7 @@ class TtGemmaConv2dPatch(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
         )
+
+        ttnn.deallocate(x)
 
         return out

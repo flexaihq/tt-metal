@@ -1,23 +1,18 @@
-"""Gemma-3-4b-it Test for Text RMSNorm"""
-
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: Apache-2.0from loguru import logger
 
-from loguru import logger
-
-import torch
-import pytest
 import os
 
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-
-
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
-
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.gemma.gemma_vision_rmsnorm import RMSNorm
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()
@@ -32,18 +27,6 @@ from models.tt_transformers.tt.model_config import ModelArgs
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "tt_layer_name, torch_layer_name, dim",
-    (
-        ("norm", "norm", 2560),
-        ("layers.0.attention_norm", "layers.0.input_layernorm", 2560),
-        ("layers.0.ffn_norm", "layers.0.post_attention_layernorm", 2560),
-        ("layers.0.pre_feedforward_layernorm", "layers.0.pre_feedforward_layernorm", 2560),
-        ("layers.0.post_feedforward_layernorm", "layers.0.post_feedforward_layernorm", 2560),
-        ("layers.0.attention.q_norm", "layers.0.self_attn.q_norm", 256),
-        ("layers.0.attention.k_norm", "layers.0.self_attn.k_norm", 256),
-    ),
-)
-@pytest.mark.parametrize(
     "seq_len",
     (128,),
 )
@@ -51,7 +34,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "batch_size",
     (1,),
 )
-def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device, tt_layer_name, torch_layer_name, dim):
+def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -63,25 +46,24 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device, tt_layer_na
 
     tt_model_args.n_layers = 1
     state_dict = tt_model_args.load_state_dict()
-    reference_model = tt_model_args.reference_transformer(wrap=False)  # Gemma3 Entire Model
-    reference_model = reference_model.model.get_submodule(torch_layer_name)
 
-    state_dict_prefix = ""
-    first_layer_prefix = state_dict_prefix + tt_layer_name + "."
+    reference_model = tt_model_args.reference_vision_rms_norm()  # Gemma3 RMSNorm
+    first_layer_prefix = "model.multi_modal_projector.mm_soft_emb_norm."
+
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    reference_model.load_state_dict(partial_state_dict)
+    # reference_model.load_state_dict(partial_state_dict)
 
     tt_inner_norm = RMSNorm(
         device=device,
-        dim=dim,
+        dim=1152,
         state_dict=state_dict,
-        state_dict_prefix=state_dict_prefix,
-        weight_key=tt_layer_name,
+        state_dict_prefix="",
+        weight_key="model.multi_modal_projector.mm_soft_emb_norm",
         weight_dtype=dtype,
-        is_distributed=tt_model_args.is_distributed_norm,
+        is_distributed=False,
         sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
         sharded_output_config=tt_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
     )
@@ -89,7 +71,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device, tt_layer_na
     # Wrap it in DistributedNorm
     tt_model = DistributedNorm(tt_inner_norm, tt_model_args, TG=tt_model_args.is_galaxy)
 
-    input = torch.rand(1, 1, dim)
+    input = torch.rand(1, 1, 1152)
 
     reference_output = reference_model(input)
 
@@ -113,17 +95,12 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device, tt_layer_na
         mesh_composer=ttnn.ConcatMesh2dToTensor(
             device, dims=(0, 2) if tt_model_args.is_galaxy else (2, 0), mesh_shape=tt_model_args.cluster_shape
         ),
-    )[:1, :, :]
+    )[:1, :, :].squeeze(0)
 
-    tt_output_torch = tt_output_torch.view(1, 1, dim)
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch[0])
-
-    non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
-    tt_output_torch = tt_output_torch[non_zero_indices]
-    reference_output = reference_output[non_zero_indices]
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(f"PCC: {torch_layer_name} , {pcc_message}")
+    logger.info(f"PCC: {pcc_message}")
 
     if passing:
         logger.info("rms_norm Passed!")

@@ -1,6 +1,3 @@
-"""Gemma-3-4b-it Test for Vision Model"""
-
-
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
@@ -13,8 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.experimental.gemma3_4b.tt.gemma_vision_model import TtSiglipGemmaVisionModel
+from models.tt_transformers.tt.multimodal.gemma.gemma_vision_model import TtSiglipGemmaVisionModel
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -66,12 +62,9 @@ def test_gemma_vision(
 
     logger.info("Checking outputs")
     out = ttnn.from_device(test_output)
-    tt_output_torch = ttnn.to_torch(out).squeeze(0)
-
-    non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
-    tt_output_torch = tt_output_torch[non_zero_indices]
-    reference_output = reference_output[non_zero_indices]
-
+    tt_output_torch = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).squeeze(0)
+    print("reference_output ", reference_output.shape)
+    print("tt_output_torch ", tt_output_torch.shape)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")

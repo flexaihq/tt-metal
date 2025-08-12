@@ -1,5 +1,3 @@
-"""Gemma-3-4b-it Test for Vision Transformer block"""
-
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
@@ -12,7 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.experimental.gemma3_4b.tt.gemma_image_block import TtGemmaImageTransformerBlock
+from models.tt_transformers.tt.multimodal.gemma.gemma_image_transformer import TtGemmaImageTransformer
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -20,10 +18,6 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 @pytest.mark.parametrize(
     "batch, num_chunks",
     ((1, 4),),
-)
-@pytest.mark.parametrize(
-    "gated",
-    (True, False),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -34,41 +28,45 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
-def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
-    dtype = ttnn.bfloat16
+def test_image_transformer_inference(batch, num_chunks, mesh_device):
     pcc_required = 0.99
-    gated = False
 
     model_args = ModelArgs(mesh_device)
+    dtype = ttnn.bfloat16
+
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    if gated:
-        first_layer_prefix = "model.vision_tower.vision_model.encoder.layers.0."
-    else:
-        first_layer_prefix = "model.vision_tower.vision_model.encoder.layers.0."
+    n_layers = model_args.vision_n_layers
+    first_layer_prefix = "model.vision_tower.vision_model.encoder."
+
+    # gated = True
+
     # partial_state_dict = {
     #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     # }
 
     dim = model_args.vision_dim
-    heads = model_args.vision_attn_n_heads
     seq_len = model_args.vision_chunk_ntok - 1
 
-    reference_model = model_args.reference_vision_encoder_block()
+    reference_model = model_args.reference_vision_encoder()
     # reference_model.load_state_dict(partial_state_dict)
     reference_model.eval()
 
-    tt_model = TtGemmaImageTransformerBlock(
+    all_tests_pass = True
+
+    tt_model = TtGemmaImageTransformer(
         mesh_device,
-        state_dict=state_dict,
+        state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
         configuration=model_args,
-        gated=gated,
+        layers=n_layers,
+        block_key="layers",
     )
 
+    # Create PT input
     pt_attention_input = torch.randn(batch, seq_len, dim)
     attention_mask = torch.zeros(batch, 1, seq_len, seq_len)
 
@@ -85,17 +83,26 @@ def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    tt_out = tt_model(attention_input, mask=tt_mask)
-    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
+    with torch.no_grad():
+        tt_out = tt_model(attention_input, mask=tt_mask)
 
-    reference_output = reference_model(pt_attention_input, attention_mask=attention_mask)[0]
+        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0, :, :, :]
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+        reference_output = reference_model(pt_attention_input, attention_mask=attention_mask)[0]
 
-    non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
-    tt_output_torch = tt_output_torch[non_zero_indices]
-    reference_output = reference_output[non_zero_indices]
+        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
-    logger.info(comp_allclose(reference_output, tt_output_torch))
-    logger.info(f"PCC: {pcc_message}")
-    assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"
+        if not passing:
+            logger.warning(f"PCC value -- {pcc_message} -- is lower than {pcc_required} for the output.")
+        else:
+            logger.info(f"PCC: {pcc_message}")
+
+        non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
+        tt_output_torch = tt_output_torch[non_zero_indices]
+        reference_output = reference_output[non_zero_indices]
+
+        logger.info(comp_allclose(reference_output, tt_output_torch))
+
+        all_tests_pass = all_tests_pass and passing
+
+        assert all_tests_pass, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

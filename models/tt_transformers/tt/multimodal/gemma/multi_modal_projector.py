@@ -11,8 +11,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
+from models.tt_transformers.tt.multimodal.gemma.gemma_vision_rmsnorm import RMSNorm
 
 
 class TtGemma3MultiModalProjector(LightweightModule):
@@ -125,5 +124,8 @@ class TtGemma3MultiModalProjector(LightweightModule):
         normed_vision_outputs = self.mm_soft_emb_norm(pooled_vision_outputs, mode=mode)
         self.mm_input_projection_weight = ttnn.to_layout(self.mm_input_projection_weight, ttnn.TILE_LAYOUT)
         projected_vision_outputs = ttnn.matmul(normed_vision_outputs, self.mm_input_projection_weight)
+
+        ttnn.deallocate(pooled_vision_outputs)
+        ttnn.deallocate(normed_vision_outputs)
 
         return projected_vision_outputs

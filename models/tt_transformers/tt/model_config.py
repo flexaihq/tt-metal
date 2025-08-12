@@ -145,7 +145,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name == "Qwen2.5-7B":
+        if base_model_name in ["Qwen2.5-7B", "gemma-3-4b"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
@@ -239,7 +239,7 @@ class ModelOptimizations:
                 TensorGroup.WO: PrecisionSetting.BFP8,
                 TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
                 # Activation across whole model
-                TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
+                TensorGroup.ACTIVATION: None,
             },
             "OpFidelity": {
                 # MLP linear operators - BFP8 with FP16 accumulation to save L1
@@ -554,7 +554,7 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "gemma-3-4b": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -1267,6 +1267,10 @@ class ModelArgs:
                 ),
             )
 
+            self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = (
+                ttnn.DRAM_MEMORY_CONFIG if self.model_name == "gemma-3-4b-it" else ttnn.L1_MEMORY_CONFIG
+            )
+            self.lm_head_dtype = ttnn.bfloat16 if self.model_name == "gemma-3-4b-it" else None
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
@@ -1436,6 +1440,7 @@ class ModelArgs:
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+        self.rope_local_theta = text_config.get("rope_local_base_freq", None)
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -1691,7 +1696,6 @@ class ModelArgs:
                         self._set_vision_params(merged_vision_config)
             else:
                 self._set_params_from_dict(self.hf_config, is_hf=True)
-
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
@@ -2275,11 +2279,8 @@ class ModelArgs:
             # Special case Qwen2.5-VL models until they are fully integrated into a HF release
             if "Qwen/Qwen2.5-VL" in self.model_name:
                 from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                )
             else:
-                from transformers import AutoConfig, AutoModelForCausalLM
+                from transformers import AutoConfig, AutoModel
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
@@ -2287,23 +2288,16 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+                model = AutoModel.from_config(config)
             else:
-                if "gemma-3" in self.model_name:
-                    from transformers import Gemma3ForConditionalGeneration
-
-                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, device_map="auto")
-                    model = model
-                    # model.layers = model.layers[: self.n_layers]  revisit it
+                if self.cache_hf_flag and self.cached_hf_model is None:
+                    model = AutoModel.from_pretrained(self.CKPT_DIR)
+                    self.cached_hf_model = model
+                elif self.cache_hf_flag and self.cached_hf_model is not None:
+                    model = self.cached_hf_model
                 else:
-                    if self.cache_hf_flag and self.cached_hf_model is None:
-                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                        self.cached_hf_model = model
-                    elif self.cache_hf_flag and self.cached_hf_model is not None:
-                        model = self.cached_hf_model
-                    else:
-                        # No caching - load fresh each time
-                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    # No caching - load fresh each time
+                    model = AutoModel.from_pretrained(self.CKPT_DIR)
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model
@@ -2466,8 +2460,7 @@ class ModelArgs:
                 model = self.reference_transformer(wrap=False)
                 layer = model.model.embed_tokens
             else:
-                # layer = reference_model.model.model.embed_tokens revisit it
-                layer = reference_model.model.embed_tokens
+                layer = reference_model.model.model.embed_tokens
 
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
@@ -2481,11 +2474,14 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            model_name_env = os.getenv("HF_MODEL")
-            if "gemma-3-4b" in model_name_env.lower():
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb, model.model.rotary_emb_local)
+            rotary_emb = model.model.rotary_emb
+
+            if "gemma-3" in self.model_name:
+                rotary_emb_local = model.model.rotary_emb_local
+                wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
             else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+                wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb)
+
             return wrapper
 
     def reference_attention(self):
@@ -2694,6 +2690,44 @@ class HfDecoderWrapper:
                 position_ids=position_ids,
                 attention_mask=mask,
             )
+        output = result[0]
+        return output
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def load_state_dict(self, state_dict):
+        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+
+
+class HfGemmaDecoderWrapper:
+    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local):
+        from transformers import DynamicCache
+
+        self.decoder = decoder
+        self.head_dim = head_dim
+        self.rotary_emb = rotary_emb
+        self.rotary_emb_local = rotary_emb_local
+        self.past_key_values = DynamicCache()
+
+    def forward(self, x, start_pos, freqs_cis_i, mask=None):
+        position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        # TODO: Generalize for other HF models
+
+        position_embeddings_global = self.rotary_emb(x, position_ids)
+        position_embeddings_local = self.rotary_emb_local(x, position_ids)
+        if mask is not None:
+            while len(mask.shape) < 4:
+                mask = mask.unsqueeze(0)
+        result = self.decoder.forward(
+            x,
+            position_embeddings_global=position_embeddings_global,
+            position_embeddings_local=position_embeddings_local,
+            past_key_value=self.past_key_values,
+            use_cache=True,
+            position_ids=position_ids,
+            attention_mask=mask,
+        )
         output = result[0]
         return output
 

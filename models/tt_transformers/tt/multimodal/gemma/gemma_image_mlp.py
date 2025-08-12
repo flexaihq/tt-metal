@@ -1,5 +1,4 @@
 """
-source: models/tt_transformers/tt/multimodal/llama_image_mlp.py
 This is the FeedForward submodule for vision block in Gemma-3-4b-it
 We have reused the TtLlamaImageFeedForward with few changes in CoreGrid and program_config configurations
 """

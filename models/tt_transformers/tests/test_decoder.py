@@ -87,6 +87,19 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling,
     )
+
+    if model_args.rope_local_theta is not None:
+        rope_setup_local = RotarySetup(
+            mesh_device,
+            model_args.max_batch_size,
+            model_args.head_dim,
+            model_args.max_seq_len,
+            model_args.rope_local_theta,
+            None,
+        )
+    else:
+        rope_setup_local = None
+
     transformation_mats = rope_setup.get_both_trans_mats()
 
     # Prepare page table for paged attention
@@ -172,12 +185,12 @@ def test_decoder_inference(
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
-
+        rot_mats_local = None if rope_setup_local is None else rope_setup_local.get_rot_mats(current_pos)
         # Run TT model
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=rot_mats,
+            rot_mats=[rot_mats, rot_mats_local],
             mode="decode",
             page_table=page_table_tt,
         )

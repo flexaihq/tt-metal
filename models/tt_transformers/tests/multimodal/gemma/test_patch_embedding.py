@@ -1,6 +1,3 @@
-"""Gemma-3-4b-it test for Vision Patch Embedding"""
-
-
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
@@ -8,13 +5,12 @@
 import os
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-import torch
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.experimental.gemma3_4b.tt.gemma_conv2d_patch import TtGemmaConv2dPatch
+from models.tt_transformers.tt.multimodal.gemma.gemma_conv2d_patch import TtGemmaConv2dPatch
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from ttnn import ConcatMeshToTensor
 
@@ -64,7 +60,6 @@ def test_conv2d_inference(
     assert W % kernel_size == 0, "Width should be divisible by kernel_size."
 
     input_tensor = torch.randn((B, NCH, H, W))
-    logger.info(f"Input tensor shape: {input_tensor.shape}")
 
     ##### Perform the torch ops #####
     reference_model = model_args.reference_siglip_patch_embed()
