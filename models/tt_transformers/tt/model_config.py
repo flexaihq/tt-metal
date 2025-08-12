@@ -1612,14 +1612,6 @@ class ModelArgs:
             "silu": ttnn.UnaryOpType.SILU,
         }.get(act_layer, ttnn.UnaryOpType.GELU)
 
-        # Optional tuning knobs
-        # self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
-        # self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
-
-        # # Optional Meta-specific knobs
-        # self.vision_max_num_chunks = vision_config.get("max_num_chunks", 4)
-        # self.vision_num_cross_attention_layers = vision_config.get("num_cross_attention_layers", -1)
-
     def _set_hf_params(self, checkpoint_dir):
         def merge_text_config(base_config):
             text_config = base_config.get("text_config", {})
@@ -1652,13 +1644,8 @@ class ModelArgs:
             if "text_config" in config or "vision_config" in config:
                 merged_text_config = merge_text_config(config)
                 self._set_params_from_dict(merged_text_config, is_hf=True)
-
-                if "Qwen2.5-VL-7B" in self.base_model_name:
+                if "vision_config" in config:
                     self._set_vision_params(config["vision_config"])
-                else:
-                    if "vision_config" in config:
-                        merged_vision_config = merge_vision_config(config)
-                        self._set_vision_params(merged_vision_config)
             else:
                 self._set_params_from_dict(config, is_hf=True)
 
