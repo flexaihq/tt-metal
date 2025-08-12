@@ -117,8 +117,6 @@ class RMSNorm(LightweightModule):
     def _distributed_rmsnorm(
         self, inp, epsilon=None, weight=None, program_config=None, memory_config=None, compute_kernel_config=None
     ):
-        inp = ttnn.sharded_to_interleaved(inp, ttnn.DRAM_MEMORY_CONFIG)
-
         xnorm = ttnn.pow(inp, 2)
 
         xnorm = ttnn.mean(xnorm, dim=-1, keepdim=True)

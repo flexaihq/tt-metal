@@ -48,7 +48,7 @@ class QwenTTVisionMLP(LightweightModule):
                 tensor_data,
                 dtype=dtype,
                 device=mesh_device,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 # cache_file_name=cache_name(name),
@@ -101,6 +101,10 @@ class QwenTTVisionMLP(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
         )
 
+        if self.args.num_devices > 1:
+            w1_out = ttnn.all_gather(w1_out, dim=3, num_links=1)
+            w3_out = ttnn.all_gather(w3_out, dim=3, num_links=1)
+
         # Element-wise multiply
         w2_in = ttnn.mul(w1_out, w3_out, dtype=ttnn.bfloat16)
 
@@ -117,5 +121,8 @@ class QwenTTVisionMLP(LightweightModule):
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
         ttnn.deallocate(w2_in)
+
+        if self.args.num_devices > 1:
+            w2_out = ttnn.all_gather(w2_out, dim=len(w2_out.shape) - 1, num_links=1)
 
         return w2_out

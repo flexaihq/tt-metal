@@ -1,4 +1,4 @@
-""""Test for Qwen 2.5 VL Vision Transformer Block"""
+"""Test for Qwen 2.5 VL Vision Attention"""
 
 import os
 
@@ -8,8 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.experimental.qwen25_vl.tt.vision_block import TtQwen2_5_VLVisionBlock
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_image_attention import TtQwen2_5_VLVisionSdpaAttention
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -27,7 +26,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
-def test_transformer_inference(batch, num_chunks, mesh_device, reset_seeds):
+def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 
@@ -35,50 +34,76 @@ def test_transformer_inference(batch, num_chunks, mesh_device, reset_seeds):
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = "visual.blocks.0."
+    first_layer_prefix = "visual.blocks.0.attn."
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
     dim = model_args.vision_dim
 
-    reference_model = model_args.reference_vision_block()
+    reference_model = model_args.reference_vision_attention()
     reference_model.load_state_dict(partial_state_dict)
     reference_model.eval()
 
-    vision_dim = model_args.vision_dim
+    hidden_size = model_args.vision_dim
     n_heads = model_args.vision_attn_n_heads
-    head_dim = vision_dim // n_heads
-    seq_len = model_args.vision_chunk_ntok - 1
+    head_dim = hidden_size // n_heads
+    seq_len = model_args.vision_chunk_ntok
 
-    tt_model = TtQwen2_5_VLVisionBlock(
+    tt_model = TtQwen2_5_VLVisionSdpaAttention(
         mesh_device,
-        state_dict=state_dict,
+        state_dict,
         state_dict_prefix=first_layer_prefix,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        model_args=model_args,
+        # weight_cache_path=model_args.weight_cache_path(dtype),
         dtype=dtype,
+        configuration=model_args,
     )
 
-    pt_attention_input = torch.randn(seq_len, vision_dim)  # no batch dim
+    seq_len = 4096
+    hidden_dim = 1280
+    num_heads = 16
+    head_dim = hidden_dim // num_heads  # 80
+    rotary_dim = head_dim // 2  # 40
+
+    # Step 1: PyTorch input
+    pt_attention_input = torch.randn(seq_len, hidden_dim)  # no batch dim
     cu_seqlens = torch.tensor([0, seq_len], dtype=torch.int32)
 
+    # Step 2: precompute cos/sin
     cos, sin = precompute_rope_cos_sin(seq_len, head_dim)
 
+    # Step 3: run PyTorch reference
     reference_output = reference_model(
         pt_attention_input, cu_seqlens, rotary_pos_emb=None, position_embeddings=(cos, sin)
     )
 
+    # Step 4: TT input
     tt_attention_input = model_args.prepare_residual_tensor_prefill(
         pt_attention_input.unsqueeze(0), force_replicated=True
     )
 
-    cos_tensor = ttnn.from_torch(cos, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    sin_tensor = ttnn.from_torch(sin, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    cos_tensor = ttnn.from_torch(
+        cos,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        layout=ttnn.TILE_LAYOUT,
+    )
+    sin_tensor = ttnn.from_torch(
+        sin,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        layout=ttnn.TILE_LAYOUT,
+    )
 
+    # Step 6: run TT
     tt_out = tt_model(tt_attention_input, cu_seqlens, position_embeddings=(cos_tensor, sin_tensor))
 
-    tt_output_torch = ttnn.to_torch(tt_out, device=mesh_device).squeeze(0).squeeze(0)
+    # Doing contract in tt is correct!!
+    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
+        : tt_out.shape[0], :
+    ]
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 

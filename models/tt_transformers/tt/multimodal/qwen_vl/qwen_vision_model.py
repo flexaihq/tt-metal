@@ -5,16 +5,16 @@ It brings together all components—patch embedding, vision blocks, rotary embed
 and patch merger for visual input processing.
 """
 
-import ttnn
-from tqdm import tqdm
-from models.common.lightweightmodule import LightweightModule
-from models.experimental.qwen25_vl.tt.vision_block import TtQwen2_5_VLVisionBlock
-from models.experimental.qwen25_vl.tt.patch_embed import TTQwen2_5_VisionPatchEmbed
-from models.experimental.qwen25_vl.tt.rope import TTQwen2_5_VisionRotaryEmbedding
-from models.experimental.qwen25_vl.tt.patch_merger import TTQwen2_5_VLPatchMerger
-
 import torch
 import torch.nn.functional as F
+from tqdm import tqdm
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_image_block import TtQwen2_5_VLVisionBlock
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_image_patch_embed import TTQwen2_5_VisionPatchEmbed
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_patch_merger import TTQwen2_5_VLPatchMerger
+from models.tt_transformers.tt.rope import TTQwen2_5_VisionRotaryEmbedding
 
 
 class TtQwen2_5_VisionTransformerPretrainedModel(LightweightModule):
@@ -43,6 +43,7 @@ class TtQwen2_5_VisionTransformerPretrainedModel(LightweightModule):
 
         self.patch_embed = TTQwen2_5_VisionPatchEmbed(
             device=mesh_device,
+            args=model_args,
             patch_size=self.patch_size,
             temporal_patch_size=temporal_patch_size,
             in_channels=3,
@@ -81,6 +82,7 @@ class TtQwen2_5_VisionTransformerPretrainedModel(LightweightModule):
             dim=5120,
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
+            args=model_args,
             weight_key="merger.",
             layer_num=None,
             weight_cache_path=None,
@@ -119,7 +121,9 @@ class TtQwen2_5_VisionTransformerPretrainedModel(LightweightModule):
         pos_ids = torch.cat(pos_ids, dim=0)
         max_grid_size = grid_thw[:, 1:].max()
         rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
-        rotary_pos_emb_full = ttnn.to_torch(rotary_pos_emb_full, device=self.mesh_device)
+        rotary_pos_emb_full = ttnn.to_torch(
+            rotary_pos_emb_full, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        )[: rotary_pos_emb_full.shape[0], :]
         rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
         return rotary_pos_emb
 
@@ -166,9 +170,7 @@ class TtQwen2_5_VisionTransformerPretrainedModel(LightweightModule):
 
     def forward(self, hidden_states, grid_thw):
         hidden_states = self.patch_embed(hidden_states)
-
         rotary_pos_emb = self.rot_pos_emb(grid_thw)
-
         window_index, cu_window_seqlens = self.get_window_index(grid_thw)
         cu_window_seqlens = torch.tensor(
             cu_window_seqlens,
@@ -178,9 +180,7 @@ class TtQwen2_5_VisionTransformerPretrainedModel(LightweightModule):
         cu_window_seqlens = torch.unique_consecutive(cu_window_seqlens)
 
         seq_len = hidden_states.shape[-2]
-
         hidden_states = ttnn.reshape(hidden_states, [seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1])
-        # hidden_states = hidden_states.reshape(seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1)
         tt_index = ttnn.from_torch(
             window_index.view(-1, 1, 1).expand(-1, hidden_states.shape[-2], hidden_states.shape[-1]).permute(1, 2, 0),
             device=self.mesh_device,
@@ -191,22 +191,31 @@ class TtQwen2_5_VisionTransformerPretrainedModel(LightweightModule):
 
         hidden_states = ttnn.gather(ttnn.permute(hidden_states, (1, 2, 0)), dim=-1, index=tt_index)
         hidden_states = ttnn.permute(hidden_states, (2, 0, 1))
-
-        hidden_states = ttnn.reshape(hidden_states, [seq_len, -1])
-        # hidden_states = hidden_states.reshape(seq_len, -1)
+        hidden_states = ttnn.reshape(hidden_states, [1, 1, seq_len, -1])
 
         rotary_pos_emb = rotary_pos_emb.reshape(seq_len // self.spatial_merge_unit, self.spatial_merge_unit, -1)
         rotary_pos_emb = rotary_pos_emb[window_index, :, :]
         rotary_pos_emb = rotary_pos_emb.reshape(seq_len, -1)
         emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
 
-        cos_tensor = ttnn.from_torch(emb.cos(), device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        sin_tensor = ttnn.from_torch(emb.sin(), device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        cos_tensor = ttnn.from_torch(
+            emb.cos(),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            layout=ttnn.TILE_LAYOUT,
+        )
+        sin_tensor = ttnn.from_torch(
+            emb.sin(),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            layout=ttnn.TILE_LAYOUT,
+        )
 
         position_embeddings = (cos_tensor, sin_tensor)
 
         ttnn.deallocate(tt_index)
-
         cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
             dim=0,
             # Select dtype based on the following factors:
@@ -216,7 +225,6 @@ class TtQwen2_5_VisionTransformerPretrainedModel(LightweightModule):
             dtype=grid_thw.dtype if torch.jit.is_tracing() else torch.int32,
         )
         cu_seqlens = F.pad(cu_seqlens, (1, 0), value=0)
-
         for layer_num, blk in enumerate(self.blocks):
             if layer_num in self.fullatt_block_indexes:
                 cu_seqlens_now = cu_seqlens

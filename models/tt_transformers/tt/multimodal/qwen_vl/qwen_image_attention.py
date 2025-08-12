@@ -9,6 +9,7 @@ models/tt_transformers/tt/multimodal/llama_image_attention.py
 
 
 import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -38,6 +39,7 @@ class TtQwen2_5_VLVisionSdpaAttention(LightweightModule):
         self.num_heads = 16
         self.head_dim = self.hidden_size // self.num_heads
         self.scale = self.head_dim**-0.5
+        self.configuration = configuration
 
         # Load qkv weight & bias (fused): shape [hidden_size, hidden_size*3]
         qkv_weight = state_dict[f"{state_dict_prefix}qkv.weight"]
@@ -48,11 +50,17 @@ class TtQwen2_5_VLVisionSdpaAttention(LightweightModule):
             torch.transpose(qkv_weight, -2, -1),
             device=mesh_device,
             dtype=dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.qkv_bias = ttnn.as_tensor(
-            qkv_bias, device=mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            qkv_bias,
+            device=mesh_device,
+            dtype=dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Output projection: proj
@@ -63,11 +71,17 @@ class TtQwen2_5_VLVisionSdpaAttention(LightweightModule):
             torch.transpose(proj_weight, -2, -1),
             device=mesh_device,
             dtype=dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.proj_bias = ttnn.as_tensor(
-            proj_bias, device=mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            proj_bias,
+            device=mesh_device,
+            dtype=dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -93,6 +107,9 @@ class TtQwen2_5_VLVisionSdpaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )  # shape [batch, seq_len, hidden_size*3]
+
+        if self.configuration.num_devices > 1:
+            qkv = ttnn.all_gather(qkv, dim=-1, num_links=1)
 
         (q, k, v) = ttnn.permute(ttnn.reshape(qkv, [seq_len, 3, self.num_heads, -1]), [1, 0, 2, 3])
         ttnn.deallocate(qkv)
@@ -135,7 +152,9 @@ class TtQwen2_5_VLVisionSdpaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
-
         ttnn.deallocate(attn_output)
+
+        if self.configuration.num_devices > 1:
+            output = ttnn.all_gather(output, dim=1, num_links=1)
 
         return output

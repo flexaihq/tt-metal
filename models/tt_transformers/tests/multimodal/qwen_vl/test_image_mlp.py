@@ -8,8 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.experimental.qwen25_vl.tt.mlp import QwenTTVisionMLP
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_image_mlp import QwenTTVisionMLP
 from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
 
 
@@ -69,8 +68,8 @@ def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds):
 
     tt_output = tt_model(tt_input)
 
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
-        :, :1, :, :
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
+        0, :, :, :
     ].squeeze()
 
     pcc_required = 0.99

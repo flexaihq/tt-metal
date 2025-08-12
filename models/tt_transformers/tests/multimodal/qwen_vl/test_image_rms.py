@@ -1,19 +1,16 @@
 """Test for Qwen 2.5 VL RMSNorm Layer Inference"""
 
-from loguru import logger
-
-import torch
-import pytest
 import os
 
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.experimental.qwen25_vl.tt.rmsnorm import RMSNorm
-
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-
-
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_rmsnorm import RMSNorm
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()

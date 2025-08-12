@@ -6,8 +6,7 @@ so it was written specifically based on Qwen-VL's architecture.
 """
 
 import ttnn
-from models.experimental.qwen25_vl.tt.rmsnorm import RMSNorm
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.qwen_vl.qwen_rmsnorm import RMSNorm
 
 
 class TTQwen2_5_VLPatchMerger:
@@ -17,6 +16,7 @@ class TTQwen2_5_VLPatchMerger:
         dim,
         state_dict,
         weight_key,
+        args,
         layer_num=None,
         state_dict_prefix="",
         weight_cache_path=None,
@@ -33,39 +33,35 @@ class TTQwen2_5_VLPatchMerger:
         self.eps = eps
         self.mode = mode
 
-        tt_model_args = ModelArgs(
-            device,
-            max_batch_size=1,
-            max_seq_len=128,
-        )
+        self.args = args
 
         weight_name_1 = f"{state_dict_prefix}{weight_key}ln_q.weight"
         weight_name_2 = f"{state_dict_prefix}{weight_key}feed_forward.0.weight"
         weight_name_3 = f"{state_dict_prefix}{weight_key}feed_forward.2.weight"
 
-        bias_name_2 = f"{state_dict_prefix}{weight_key}feed_forward.0.bias"
-        bias_name_3 = f"{state_dict_prefix}{weight_key}feed_forward.2.bias"
-
         self.weight_1 = ttnn.as_tensor(
             state_dict[weight_name_1],
             device=device,
             dtype=weight_dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=weight_memory_config,
         )
 
         self.weight_2 = ttnn.as_tensor(
-            state_dict[weight_name_2],
+            state_dict[weight_name_2].transpose(0, 1),
             device=device,
             dtype=weight_dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1),
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
         )
 
         self.weight_3 = ttnn.as_tensor(
-            state_dict[weight_name_3],
+            state_dict[weight_name_3].transpose(0, 1),
             device=device,
             dtype=weight_dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1),
             layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
         )
@@ -79,13 +75,9 @@ class TTQwen2_5_VLPatchMerger:
             weight_key="visual.merger.ln_q",
             weight_dtype=ttnn.bfloat16,
             is_distributed=False,
-            sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
+            sharded_program_config=self.args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
             sharded_output_config=False,
         )
-
-        self.weight_3 = ttnn.transpose(self.weight_3, 0, 1)
-
-        self.weight_2 = ttnn.transpose(self.weight_2, 0, 1)
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -96,8 +88,7 @@ class TTQwen2_5_VLPatchMerger:
 
     def __call__(self, x):
         x = self.ln_q(x, mode=self.mode)
-
-        x = ttnn.reshape(x, (-1, self.hidden_size))
+        x = ttnn.reshape(x, (1, 1, -1, self.hidden_size))
 
         x = ttnn.linear(
             x,
@@ -105,6 +96,10 @@ class TTQwen2_5_VLPatchMerger:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+
+        if self.args.num_devices > 1:
+            x = ttnn.all_gather(x, dim=3)
+
         x = ttnn.gelu(x)
 
         x = ttnn.linear(
@@ -113,5 +108,9 @@ class TTQwen2_5_VLPatchMerger:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
         )
+        if self.args.num_devices > 1:
+            x = ttnn.all_gather(x, dim=3, num_links=1)
+
+        x = ttnn.reshape(x, (-1, x.shape[-1]))
 
         return x

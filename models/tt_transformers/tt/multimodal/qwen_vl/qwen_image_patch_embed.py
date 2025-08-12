@@ -14,6 +14,7 @@ class TTQwen2_5_VisionPatchEmbed:
     def __init__(
         self,
         device,
+        args,
         patch_size,
         temporal_patch_size,
         in_channels,
@@ -36,6 +37,7 @@ class TTQwen2_5_VisionPatchEmbed:
         self.embed_dim = embed_dim
         self.weight_memory_config = weight_memory_config
         self.weight_dtype = weight_dtype
+        self.args = args
 
         weight_name_1 = f"{state_dict_prefix}{weight_key}proj.weight"
         torch_weight = state_dict[weight_name_1]
@@ -45,6 +47,7 @@ class TTQwen2_5_VisionPatchEmbed:
             weight_matrix.T,
             device=self.device,
             dtype=self.weight_dtype,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=-1),
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.weight_memory_config,
         )
@@ -58,5 +61,8 @@ class TTQwen2_5_VisionPatchEmbed:
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x_flattened = ttnn.reshape(x, (x.shape[2], -1))
         output = ttnn.matmul(x_flattened, self.weight, compute_kernel_config=self.compute_kernel_config)
+
+        if self.args.num_devices > 1:
+            output = ttnn.all_gather(output, dim=1, num_links=1)
 
         return output
