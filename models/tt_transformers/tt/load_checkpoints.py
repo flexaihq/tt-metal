@@ -238,6 +238,7 @@ def map_hf_to_meta_keys(loaded_weights):
     """
     replacements = [
         ("^emb.weight", "weight"),
+        ("language.model.", ""),
         ("model.", ""),
         ("embed_tokens", "tok_embeddings"),
         ("lm_head", "output"),
@@ -254,6 +255,35 @@ def map_hf_to_meta_keys(loaded_weights):
         ("o_proj", "wo"),
     ]
     return replace_keys(loaded_weights, replacements)
+
+
+def map_vision_meta_to_hf_keys(loaded_weights):
+    """
+    Map Hugging Face checkpoint keys to Meta checkpoint keys.
+    You can use this to support other models by adding more mappings.
+    See replace_keys for more details on the format of replacements.
+    """
+    inverted_mapping = [
+        ("attention_norm", "input_layernorm"),
+        ("ffn_norm", "post_attention_layernorm"),
+        ("attention", "self_attn"),
+        ("feed_forward", "mlp"),
+        ("w1", "gate_proj"),
+        ("w2", "down_proj"),
+        ("w3", "up_proj"),
+        ("wq", "q_proj"),
+        ("wk", "k_proj"),
+        ("wv", "v_proj"),
+        ("wo", "o_proj"),
+    ]
+
+    return replace_keys(loaded_weights, inverted_mapping)
+
+
+def convert_vision_meta_to_hf(state_dict, head_dim):
+    # state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
+    state_dict = map_vision_meta_to_hf_keys(state_dict)
+    return state_dict
 
 
 def map_meta_to_hf_keys(loaded_weights):
