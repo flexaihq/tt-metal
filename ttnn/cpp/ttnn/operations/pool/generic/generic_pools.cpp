@@ -4,7 +4,6 @@
 
 #include "generic_pools.hpp"
 
-#include <optional>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -14,7 +13,6 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
-#include <limits>
 
 namespace ttnn {
 namespace operations::pool {
@@ -32,7 +30,7 @@ static Tensor pool2d_invoke(
     uint32_t channels,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::optional<std::array<uint32_t, 2>> dilation = std::nullopt,
     bool ceil_mode = false,
     bool count_include_pad = true,
@@ -40,6 +38,24 @@ static Tensor pool2d_invoke(
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     bool in_place_halo = false) {
+    std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
+    bool is_out_tiled = false;  // pool output is row major
+    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    validate_input_params(
+        input_tensor,
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        kernel_size,
+        stride,
+        padding_4d[0],
+        padding_4d[1],
+        padding_4d[2],
+        padding_4d[3],
+        dilation.has_value() ? dilation.value()[0] : 1,
+        dilation.has_value() ? dilation.value()[1] : 1,
+        is_in_tiled);
     uint32_t dilation_h = dilation.has_value() ? dilation.value().at(0) : 1;
     uint32_t dilation_w = dilation.has_value() ? dilation.value().at(1) : 1;
     sliding_window::SlidingWindowConfig sliding_window_config{
@@ -47,17 +63,13 @@ static Tensor pool2d_invoke(
         .input_hw = {input_h, input_w},
         .window_hw = {kernel_size.at(0), kernel_size.at(1)},
         .stride_hw = {stride.at(0), stride.at(1)},
-        .padding = {padding.at(0), padding.at(0), padding.at(1), padding.at(1)},
+        .padding = {padding_4d.at(0), padding_4d.at(1), padding_4d.at(2), padding_4d.at(3)},
         .dilation_hw = {dilation_h, dilation_w},
         .ceil_mode = ceil_mode,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
-    auto output_shape = sliding_window_config.get_output_shape();  // last dim/width is 0
+    auto output_shape = sliding_window_config.get_output_shape();
     auto input_tensor_sharded = input_tensor;
-
-    // pool output is row major
-    bool is_out_tiled = false;
-    bool is_in_tiled = input_tensor.dtype() == DataType::BFLOAT8_B;  // input tiled for bfp8_b
 
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor_sharded.memory_config();
@@ -81,15 +93,18 @@ static Tensor pool2d_invoke(
                 output_shape[1],
                 output_shape[2],
                 channels,
+                tt::constants::TILE_WIDTH,
                 input_tensor.device()->compute_with_storage_grid_size(),
                 ShardOrientation::ROW_MAJOR,
                 false,
                 false,
-                false,
+                is_in_tiled,  // if input is tiled we need to choose num_cores_c to make the shard width to be a tile
+                              // multiple, it cannot be 16
                 0);
         } else {  // auto-sharding
             std::optional<sliding_window::ParallelConfig> sw_parallel_config =
-                pool::determine_pool_config_for_auto_shard(input_tensor, sliding_window_config, channels, pool_type);
+                pool::determine_pool_config_for_auto_shard(
+                    input_tensor, sliding_window_config, channels, pool_type, count_include_pad, divisor_override);
             TT_FATAL(
                 sw_parallel_config.has_value(),
                 "autosharding could not determine valid shard scheme, please check tensor dimensions");
@@ -121,17 +136,13 @@ static Tensor pool2d_invoke(
 
     // update the shard spec to match the output shape
     auto shard_spec = out_memory_config.shard_spec().value();
-    uint32_t output_shard_width_padded =
-        input_tensor.dtype() == DataType::BFLOAT8_B
-            ? tt::round_up(channels / num_cores_c, tt::constants::TILE_WIDTH)
-            : tt::round_up(
-                  channels / num_cores_c *
-                      tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype())),
-                  tt::constants::TILE_WIDTH);
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     uint32_t output_nhw_padded =
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
+    uint32_t output_c = channels;
+    uint32_t output_c_padded = tt::round_up(output_c, num_cores_c * (is_out_tiled ? tt::constants::TILE_WIDTH : 1));
+    uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
         tt::LogOp,
         "output_nhw: {}, output_nhw_padded: {}, output_shard_height_padded: {}, output_shard_width_padded: {}",
@@ -146,7 +157,7 @@ static Tensor pool2d_invoke(
         .input_hw = {input_h, input_w},
         .window_hw = {kernel_size.at(0), kernel_size.at(1)},
         .stride_hw = {stride.at(0), stride.at(1)},
-        .padding = {padding.at(0), padding.at(0), padding.at(1), padding.at(1)},
+        .padding = {padding_4d.at(0), padding_4d.at(1), padding_4d.at(2), padding_4d.at(3)},
         .dilation_hw = {dilation_h, dilation_w},
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
@@ -198,7 +209,7 @@ Tensor MaxPool2DOp::invoke(
     uint32_t channels,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     bool ceil_mode,
     const std::optional<const MemoryConfig>& memory_config,
@@ -233,7 +244,7 @@ Tensor AvgPool2DOp::invoke(
     uint32_t channels,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     bool ceil_mode,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,

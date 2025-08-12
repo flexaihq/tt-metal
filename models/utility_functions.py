@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import struct
 import time
 from typing import Union
@@ -15,6 +16,18 @@ from ttnn.device import Arch
 from typing_extensions import deprecated
 
 import ttnn
+
+
+def get_mesh_device():
+    """Fixture to provide mesh device configuration."""
+    mesh_device = os.environ.get("MESH_DEVICE", "N150")
+    mesh_config = {
+        "N150": (1, 1),
+        "N300": (2, 1),
+        "T3K": (8, 1),
+        "TG": (8, 4),
+    }.get(mesh_device, (ttnn.get_num_devices(), 1))
+    return mesh_config
 
 
 ### Math operations ###
@@ -978,18 +991,11 @@ def run_for_grayskull(reason_str="only runs for Grayskull"):
 def get_devices_for_t3000(all_devices, num_devices):
     """
     all_devices comes from fixture which devices in order from 0 to 7.
-    First 4 devices are PCIE devices so we can just extract and return.
-    For 8 devices, return in a ring pattern.
     """
     assert num_devices <= len(all_devices), "Not enough devices detected!"
 
-    if num_devices <= 4:
+    if num_devices <= 4 or num_devices == 8:
         return all_devices[:num_devices]
-    elif num_devices == 8:
-        # Temporary until we move request for ring order to CCL operations directly.
-        # This is better because we no longer need to manually manage the ring order.
-        ring_indices = ttnn.get_t3k_physical_device_ids_ring()
-        return [all_devices[i] for i in ring_indices]
     else:
         raise NotImplementedError("Only supports 1, 2, 3, 4, and 8 chip configurations!")
 

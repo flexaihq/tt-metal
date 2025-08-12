@@ -21,6 +21,16 @@
 namespace ttnn {
 namespace ccl {
 
+struct SyncModeSpec {
+    uint32_t num_signals = 0;
+    CoreCoord core;
+    std::vector<uint32_t> sem_ids;
+    std::vector<uint32_t> wait_counts;
+
+    void add_signal(uint32_t sem_id, uint32_t wait_count);
+};
+
+
 enum class LineDirection: uint8_t {
     FORWARD,
     BACKWARD,
@@ -51,14 +61,10 @@ SenderRecieverConfig get_device_sender_receiver_config_in_ring(
 // Returns a vector of devices that the given tensor is stored on.
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 
-struct SyncModeSpec {
-    uint32_t num_signals = 0;
-    CoreCoord core;
-    std::vector<uint32_t> sem_ids;
-    std::vector<uint32_t> wait_counts;
-
-    void add_signal(uint32_t sem_id, uint32_t wait_count);
-};
+// Returns a vector of devices that `tensor_shards` are stored on.
+// Each `tensor_shard` is assumed to be allocated on a 1x1 "unit-mesh"; the function returns the devices that the shards
+// to run a CCL over the unit-meshes.
+std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
 
 class EriscDatamoverBuilder;
 
@@ -392,7 +398,6 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
         TT_THROW("deprecated code path for ");
     }
 
-   public:
     std::vector<tt_xy_pair> get_worker_slice_shapes() const { return this->worker_slice_shapes; }
     uint32_t get_worker_slice_size_bytes(std::size_t worker_index) {
         TT_ASSERT(this->worker_slice_shapes.size() > worker_index, "Invalid worker index {} in `worker_slice_shapes` of size {}", worker_index, worker_slice_shapes.size());
@@ -564,14 +569,6 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
-    const tt::tt_metal::IDevice* device,
-    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
-    const CoreCoord& eth_core,
-    tt::tt_metal::DataMovementProcessor risc_id,
-    tt::tt_metal::NOC noc_id);
-
-tt::tt_metal::KernelHandle generate_edm_kernel(
-    tt::tt_metal::Program& program,
     const IDevice* device,
     const EriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
@@ -705,6 +702,17 @@ private:
 };
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);
+
+// Forward/backward devices are assumed to be neighbors for 1D fabric for now
+std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device);
+
+std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
+    size_t ring_size, size_t ring_index, Topology topology, bool static_alternate);
+
+// Forward/backward devices are assumed to be neighbors for 1D fabric for now
+std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
+    Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device, uint32_t num_targets_forward, uint32_t num_targets_backward);
+
 
 }  // namespace ccl
 }  // namespace ttnn
