@@ -109,7 +109,7 @@ class TtQwen2_5_VLVisionSdpaAttention(LightweightModule):
         )  # shape [batch, seq_len, hidden_size*3]
 
         if self.configuration.num_devices > 1:
-            qkv = ttnn.all_gather(qkv, dim=-1, num_links=1)
+            qkv = ttnn.all_gather(qkv, dim=3, num_links=1)
 
         (q, k, v) = ttnn.permute(ttnn.reshape(qkv, [seq_len, 3, self.num_heads, -1]), [1, 0, 2, 3])
         ttnn.deallocate(qkv)
@@ -155,6 +155,7 @@ class TtQwen2_5_VLVisionSdpaAttention(LightweightModule):
         ttnn.deallocate(attn_output)
 
         if self.configuration.num_devices > 1:
-            output = ttnn.all_gather(output, dim=1, num_links=1)
+            output = ttnn.all_gather(ttnn.reshape(output, (1, 1, output.shape[0], -1)), dim=3, num_links=1)
+            output = ttnn.reshape(output, (output.shape[2], -1))
 
         return output
