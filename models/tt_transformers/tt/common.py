@@ -9,11 +9,12 @@ from typing import Optional
 
 import torch
 from loguru import logger
-from pydantic import AliasChoices, BaseModel, Field
-
+from pydantic import BaseModel, Field,AliasChoices
+import os
 import ttnn
 from ttnn import ConcatMeshToTensor
 
+model_name = os.getenv("HF_MODEL")
 
 class HostEmbedding(torch.nn.Module):
     def __init__(self, model_args):
@@ -23,15 +24,13 @@ class HostEmbedding(torch.nn.Module):
     def forward(self, x):
         return self.emb(x)
 
-
-class HostScaledEmbedding(HostEmbedding):
-    def __init__(self, model_args):
-        super().__init__(model_args)
-        self.embed_scale = model_args.embed_scale
-
-    def forward(self, x):
-        return self.emb(x) * self.embed_scale
-
+if model_name!="mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+    class HostScaledEmbedding(HostEmbedding):
+        def __init__(self, model_args):
+            super().__init__(model_args)
+            self.embed_scale = model_args.embed_scale
+        def forward(self, x):
+            return self.emb(x) * self.embed_scale
 
 # Default configuration for Paged Attention
 class PagedAttentionConfig:
@@ -52,13 +51,16 @@ class RopeScalingType(str, Enum):
 
 class RopeScaling(BaseModel):
     """RoPE scaling configuration."""
-
-    rope_type: RopeScalingType = Field(
+    if model_name=="mistral/Mistral-Small-3.1-24B-Instruct-2503":
+        rope_type: RopeScalingType = Field(exclude=True, description="RoPE scaling type")
+        factor: Optional[float]
+        original_max_position_embeddings: int
+    else:
+        rope_type: RopeScalingType = Field(
         validation_alias=AliasChoices("rope_type", "type"), exclude=True, description="RoPE scaling type"
     )
-    factor: float
-    original_max_position_embeddings: Optional[int] = None
-
+        factor: float
+        original_max_position_embeddings: Optional[int] = None
 
 class RopeScalingLinear(RopeScaling):
     """RoPE scaling configuration for linear."""
@@ -88,6 +90,8 @@ def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
         return RopeScalingLinear(**rope_scaling_params)
     elif rope_scaling_type == RopeScalingType.LLAMA3:
         return RopeScalingLlama3(**rope_scaling_params)
+    elif  rope_scaling_type == RopeScalingType.LINEAR:
+        return RopeScalingLinear(**rope_scaling_params)
     elif rope_scaling_type == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
     elif rope_scaling_type in ["default", "mrope"]:
@@ -97,7 +101,7 @@ def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
         return None
     else:
         raise ValueError(f"Unexpected RoPE scaling type: {rope_scaling_type}")
-
+# below function is mistral 24B model specific function
 def generate_block_attention_mask_tt(patch_embeds_list, tensor, tt_device):
     tensor = ttnn.to_torch(tensor, mesh_composer=ConcatMeshToTensor(tt_device, dim=0))
     device = tensor.device
@@ -122,7 +126,7 @@ def generate_block_attention_mask_tt(patch_embeds_list, tensor, tt_device):
     )
     return causal_mask_tt
 
-
+# below function is mistral 24B model specific function
 def position_ids_in_meshgrid_tt(tt_patch_embeds_list, max_width, device):
     position_ids_tt = []
     for tt_patch in tt_patch_embeds_list:
@@ -141,7 +145,6 @@ def position_ids_in_meshgrid_tt(tt_patch_embeds_list, max_width, device):
         )
         position_ids_tt.append(tt_ids[:, 0])
     return ttnn.concat(position_ids_tt, dim=0)
-
 
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):
     """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
@@ -299,11 +302,11 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: in
             new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
-
+# below function is mistral 24B model specific function
 def apply_scaling_vision(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
     return freqs / scale_factor
 
-
+# below function is mistral 24B model specific function
 def precompute_vision_freqs(
     dim: int, max_patches_per_side: int, theta: float, scale_factor=None, orig_context_len=None
 ):

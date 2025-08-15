@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 from safetensors.torch import load_file as safetensors_load_file
 from tqdm import tqdm
-
+model_name = os.getenv("HF_MODEL")
 
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
 def load_hf_state_dict(ckpt_dir):
@@ -336,7 +336,9 @@ def map_meta_to_hf_keys(loaded_weights):
         # Host embeddings
         "emb.weight": "weight",
     }
-
+    # Add norm.weight mapping for non-Mistral models
+    if model_name != "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+        meta_to_hf_mappings["norm.weight"] = "model.norm.weight"
     hf_state_dict = {}
     for key, tensor in loaded_weights.items():
         # Handle full model paths with layer numbers
@@ -368,6 +370,7 @@ def map_meta_to_hf_keys(loaded_weights):
         # If no mapping found, keep the original key
         if not matched:
             hf_state_dict[key] = tensor
+        
 
     return hf_state_dict
 

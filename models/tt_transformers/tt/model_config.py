@@ -45,7 +45,7 @@ print("*" * 200)
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 
-
+model_name = os.getenv("HF_MODEL")
 class TensorGroup(Enum):
     FF1_FF3 = "ff1_3"
     FF2 = "ff2"
@@ -146,7 +146,7 @@ class ModelOptimizations:
         """Configuration optimized for performance
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
-        if model_name == "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+        if model_name=="mistralai/Mistral-Small-3.1-24B-Instruct-2503":
             base_model_name = model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
         else:
             base_model_name = get_base_model_name(model_name)
@@ -730,13 +730,19 @@ class ModelArgs:
             # All Gather Matmul for Dense Out (DO)
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
             # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
-            # TODO: #26657 (self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
-            self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
-                self.num_devices == 8
-                and os.getenv("ACTUAL_DEVICE", "") != "TG"
-                and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
-                and self.num_devices > 1
-            )
+            if model_name=="mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+                self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
+                    self.ccl_topology() == ttnn.Topology.Ring
+                    and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
+                    and self.num_devices > 1
+                )
+            else:
+                self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
+                    self.num_devices == 8
+                    and os.getenv("ACTUAL_DEVICE", "") != "TG"
+                    and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
+                    and self.num_devices > 1
+                )
 
             if self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]:
                 do_core_grid_size = (8, 1)
@@ -809,12 +815,15 @@ class ModelArgs:
                 if self.is_galaxy
                 else (
                     1024
-                    if self.num_devices == 8
-                    and os.getenv("ACTUAL_DEVICE", "") != "TG"
+                    if (
+                        (model_name == "mistralai/Mistral-Small-3.1-24B-Instruct-2503" and self.ccl_topology() == ttnn.Topology.Ring)
+                        or (self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG")
+                    )
                     and 1024 % (self.dim / self.num_devices) == 0
                     else self.dim
                 )
             )
+
             num_rows = lambda seq_len: min(seq_len, 1024)
             dram_sharded_wo = not (self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] or self.is_galaxy)
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
@@ -1506,7 +1515,7 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         # Vision params (Meta-specific)
-        if self.model_name in "Mistral-Small-3.1-24B-Instruct-2503":
+        if model_name=="mistralai/Mistral-Small-3.1-24B-Instruct-2503":
             self.vision_chunk_size = config.get("vision_chunk_size", 896)
         else:
             self.vision_chunk_size = config.get("vision_chunk_size", -1)
@@ -1600,21 +1609,7 @@ class ModelArgs:
             if self.rope_scaling_factor is not None
             else None
         )
-
-    # def _set_vision_params(self, vision_config):
-    #     self.vision_dim = vision_config.get("hidden_size", 1280)
-    #     self.vision_mlp_ratio = vision_config.get("intermediate_size", self.vision_dim * 4) // self.vision_dim
-    #     self.vision_hidden_dim = vision_config.get("intermediate_size", self.vision_dim * self.vision_mlp_ratio)
-    #     self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
-    #     self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
-    #     self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
-    #     self.vision_patch_size = vision_config.get("patch_size", 14)
-    #     self.vision_in_channels = vision_config.get("num_channels", 3)
-    #     self.vision_act_layer = ttnn.UnaryOpType.GELU  # or read from config if variable
-    #     self.vision_dropout = vision_config.get("attention_dropout", 0.0)
-    #     self.vision_max_num_tiles = 4
-    #     self.vision_n_global_layers = 8
-
+# Note: This function is specific to the Mistral model.
     def _set_vision_params(self, vision_config):
         self.vision_chunk_size = vision_config.get("vision_chunk_size", 896)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
@@ -1685,6 +1680,7 @@ class ModelArgs:
                 self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR)
 
             config = self.hf_config.to_dict()
+            # Note: This function is specific to the Mistral model.
             if "text_config" in config or "vision_config" in config:
                 merged_text_config = merge_text_config(config)
                 self._set_params_from_dict(merged_text_config, is_hf=True)
@@ -1738,6 +1734,7 @@ class ModelArgs:
             "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
         }
+        #Note: This function is specific to the Mistral model.
         vision_module_map = {
             "MLP": "mlp.",
             "Attention": "self_attn.",
@@ -1799,7 +1796,7 @@ class ModelArgs:
 
                 model = AutoModelForCausalLM.from_pretrained(
                     self.CKPT_DIR,
-                    torch_dtype=torch.bfloat16,
+                    torch_dtype="auto"
                     # Note that the default setting is torch.dtype.float32, but model weights are
                     # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                     # unnecessary cast.
@@ -2324,7 +2321,7 @@ class ModelArgs:
                 return wrapper
             else:
                 return model
-
+    # Note: This function is specific to the Mistral model.
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.multi_modal_projector
@@ -2374,7 +2371,7 @@ class ModelArgs:
             return RMSNorm(self.dim, self.norm_eps)
         else:
             model = self.reference_transformer(wrap=False)
-            if model_name == "Mistral-Small-3.1-24B_Instruct-2503":
+            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
                 layers = getattr(model, "layers", getattr(model, "model", {}).layers)
                 layer = layers[0].input_layernorm
             else:
@@ -2382,7 +2379,7 @@ class ModelArgs:
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
-
+    # Note: This function is specific to the Mistral model.
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
         if self.checkpoint_type == CheckpointType.HuggingFace:
             from transformers import AutoConfig, AutoModelForCausalLM
@@ -2538,15 +2535,15 @@ class ModelArgs:
 
     def reference_embedding(self, reference_model=None):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.tt_transformers.tt.common import HostEmbedding, HostScaledEmbedding
+            from models.tt_transformers.tt.common import HostEmbedding,HostScaledEmbedding
 
-            return HostEmbedding(self) if self.embed_scale is None else HostScaledEmbedding(self)
+            return HostEmbedding(self)if self.embed_scale is None else HostScaledEmbedding(self)
         else:
             if reference_model is None:
                 model = self.reference_transformer(wrap=False)
                 layer = model.model.embed_tokens
             else:
-                if model_name == "Mistral-Small-3.1-24B-Instruct-2503":
+                if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name: 
                     layer = reference_model.model.embed_tokens
                 else:
                     layer = reference_model.model.model.embed_tokens

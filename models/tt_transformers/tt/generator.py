@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from pyexpat import model
+from turtle import mode
 
 import torch
 from llama_models.llama3.api.datatypes import InterleavedTextMedia, StopReason
@@ -23,6 +25,7 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
 )
 
+model_name = os.getenv("HF_MODEL")
 
 @dataclass(frozen=True)
 class SamplingParams:
@@ -158,60 +161,99 @@ class Generator:
                 ), f"Chunk end should be less than seq_len, got chunk_end={chunk_end} and seq_len={seq_len}"
                 chunk_tokens = tokens[:, chunk_start:chunk_end]
                 chunk_page_table = page_table_user[:, chunk_start // block_size : chunk_end // block_size]
+                if model_name == "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+                    (
+                        chunk_prefill_input,
+                        chunk_rot_mats_prefill,
+                        page_table_tt,
+                        chunk_page_table_tt,
+                    ) = self.model[model_id].prepare_inputs_prefill(
+                        chunk_tokens,
+                        start_pos=chunk_start,
+                        page_table=page_table_user_padded,
+                        chunk_page_table=chunk_page_table,
+                        **kwargs,
+                    )
+                    tt_logits = self.model[model_id].ttnn_prefill_forward(
+                        chunk_prefill_input,
+                        rot_mats=chunk_rot_mats_prefill,
+                        user_id=CHUNK_USER_ID,
+                        page_table=page_table_tt,
+                        chunk_page_table=chunk_page_table_tt,
+                        chunk_start_idx=chunk_start,
+                        get_last_token=(last_token_idx_in_chunk // 32) * 32,
+                        kv_cache=kv_cache,
+                        **kwargs,
+                    )
+                else:
+                    (
+                        chunk_prefill_input,
+                        chunk_rot_mats_global_prefill,
+                        chunk_rot_mats_local_prefill,
+                        page_table_tt,
+                        chunk_page_table_tt,
+                    ) = self.model[model_id].prepare_inputs_prefill(
+                        chunk_tokens,
+                        start_pos=chunk_start,
+                        page_table=page_table_user_padded,
+                        chunk_page_table=chunk_page_table,
+                    )
+                    tt_logits = self.model[model_id].ttnn_prefill_forward(
+                        chunk_prefill_input,
+                        rot_mats_global=chunk_rot_mats_global_prefill,
+                        rot_mats_local=chunk_rot_mats_local_prefill,
+                        user_id=CHUNK_USER_ID,
+                        page_table=page_table_tt,
+                        chunk_page_table=chunk_page_table_tt,
+                        chunk_start_idx=chunk_start,
+                        get_last_token=(last_token_idx_in_chunk // 32) * 32,
+                        kv_cache=kv_cache,
+                    )
 
-                (
-                    chunk_prefill_input,
-                    chunk_rot_mats_global_prefill,
-                    chunk_rot_mats_local_prefill,
-                    page_table_tt,
-                    chunk_page_table_tt,
-                ) = self.model[model_id].prepare_inputs_prefill(
-                    chunk_tokens,
-                    start_pos=chunk_start,
-                    page_table=page_table_user_padded,
-                    chunk_page_table=chunk_page_table,
-                    **kwargs,
-                )
-                tt_logits = self.model[model_id].ttnn_prefill_forward(
-                    chunk_prefill_input,
-                    rot_mats_global=chunk_rot_mats_global_prefill,
-                    rot_mats_local=chunk_rot_mats_local_prefill,
-                    user_id=CHUNK_USER_ID,
-                    page_table=page_table_tt,
-                    chunk_page_table=chunk_page_table_tt,
-                    chunk_start_idx=chunk_start,
-                    get_last_token=(last_token_idx_in_chunk // 32) * 32,
-                    kv_cache=kv_cache,
-                    **kwargs,
-                )
 
                 if chunk_start == last_chunk_start:
                     return tt_logits
                 else:
                     del tt_logits
         else:
-            (
-                prefill_input,
-                rot_mats_global_prefill,
-                rot_mats_local_prefill,
-                page_table_tt,
-                _,
-            ) = self.model[model_id].prepare_inputs_prefill(
-                tokens,
-                page_table=page_table,
-                **kwargs,
-            )
+            if model_name == "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+                prefill_input, rot_mats_prefill, page_table_tt, _ = self.model[model_id].prepare_inputs_prefill(
+                    tokens,
+                    page_table=page_table,
+                    **kwargs,
+                )
 
-            tt_logits = self.model[model_id].ttnn_prefill_forward(
-                prefill_input,
-                rot_mats_global=rot_mats_global_prefill,
-                rot_mats_local=rot_mats_local_prefill,
-                user_id=user_id,
-                page_table=page_table_tt,
-                get_last_token=(last_token_idx // 32) * 32,
-                kv_cache=kv_cache,
-            )
-            return tt_logits
+                tt_logits = self.model[model_id].ttnn_prefill_forward(
+                    prefill_input,
+                    rot_mats=rot_mats_prefill,
+                    user_id=user_id,
+                    page_table=page_table_tt,
+                    get_last_token=(last_token_idx // 32) * 32,
+                    kv_cache=kv_cache,
+                )
+                return tt_logits
+            else:
+                (
+                    prefill_input,
+                    rot_mats_global_prefill,
+                    rot_mats_local_prefill,
+                    page_table_tt,
+                    _,
+                ) = self.model[model_id].prepare_inputs_prefill(
+                    tokens,
+                    page_table=page_table,
+                )
+
+                tt_logits = self.model[model_id].ttnn_prefill_forward(
+                    prefill_input,
+                    rot_mats_global=rot_mats_global_prefill,
+                    rot_mats_local=rot_mats_local_prefill,
+                    user_id=user_id,
+                    page_table=page_table_tt,
+                    get_last_token=(last_token_idx // 32) * 32,
+                    kv_cache=kv_cache,
+                )
+                return tt_logits
 
     # Note: This function is called by vLLM
     def decode_forward_text(
@@ -271,34 +313,59 @@ class Generator:
         tt_rot_mat_idxs_global = []
         tt_rot_mat_idxs_local = []
         tt_page_table = []
+        tt_rot_mat_idxs_global = []
+
+        tt_rot_mat_idxs_local = []
 
         for i in range(self.data_parallel):
-            user_page_table = page_table[i] if page_table is not None else None
-            model_i = self.model[i]
-            (
-                tt_tokens_i,
-                tt_current_pos_i,
-                tt_rot_mat_idxs_global_i,
-                tt_rot_mat_idxs_local_i,
-                tt_page_table_i,
-            ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
-            tt_tokens.append(tt_tokens_i)
-            tt_current_pos.append(tt_current_pos_i)
-            tt_rot_mat_idxs_global.append(tt_rot_mat_idxs_global_i)
-            tt_rot_mat_idxs_local.append(tt_rot_mat_idxs_local_i)
-            tt_page_table.append(tt_page_table_i)
+            if model_name == "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+                user_page_table = page_table[i] if page_table is not None else None
+                tt_tokens_i, tt_current_pos_i, tt_rot_mats_i, tt_page_table_i = self.model[i].prepare_inputs_decode(
+                    tokens[i], current_pos[i], user_page_table
+                )
+                tt_tokens.append(tt_tokens_i)
+                tt_current_pos.append(tt_current_pos_i)
+                tt_rot_mats.append(tt_rot_mats_i)
+                tt_page_table.append(tt_page_table_i)
+            else: 
+                user_page_table = page_table[i] if page_table is not None else None
+                model_i = self.model[i]
+                (
+                    tt_tokens_i,
+                    tt_current_pos_i,
+                    tt_rot_mat_idxs_global_i,
+                    tt_rot_mat_idxs_local_i,
+                    tt_page_table_i,
+                ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
+                tt_tokens.append(tt_tokens_i)
+                tt_current_pos.append(tt_current_pos_i)
+                tt_rot_mat_idxs_global.append(tt_rot_mat_idxs_global_i)
+                tt_rot_mat_idxs_local.append(tt_rot_mat_idxs_local_i)
+                tt_page_table.append(tt_page_table_i)
+
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            tt_logits_i = self.model[i].ttnn_decode_forward(
-                tt_tokens[i],
-                tt_current_pos[i],
-                rot_mat_idxs_global=tt_rot_mat_idxs_global[i],
-                rot_mat_idxs_local=tt_rot_mat_idxs_local[i],
-                page_table=tt_page_table[i],
-                kv_cache=user_kv_cache,
-                argmax_on_device=argmax_on_device,
-            )
+            if model_name == "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+                tt_logits_i = self.model[i].ttnn_decode_forward(
+                    tt_tokens[i],
+                    tt_current_pos[i],
+                    rot_mats=tt_rot_mats[i],
+                    page_table=tt_page_table[i],
+                    kv_cache=user_kv_cache,
+                    argmax_on_device=argmax_on_device,
+                )
+            else:
+                tt_logits_i = self.model[i].ttnn_decode_forward(
+                    tt_tokens[i],
+                    tt_current_pos[i],
+                    rot_mat_idxs_global=tt_rot_mat_idxs_global[i],
+                    rot_mat_idxs_local=tt_rot_mat_idxs_local[i],
+                    page_table=tt_page_table[i],
+                    kv_cache=user_kv_cache,
+                    argmax_on_device=argmax_on_device,
+                )
+
             tt_logits.append(tt_logits_i)
 
         return tt_logits
@@ -338,14 +405,54 @@ class Generator:
             trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
             trace_ids[i] = trace_id
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            tt_out_trace.append(
-                self.model[i].ttnn_decode_forward(
-                    *device_inputs[i], kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
+            if model_name=="mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+                transformed_inputs = self.model[i].transform_decode_inputs_device(*(device_inputs[i]))
+                tt_out_trace.append(
+                    self.model[i].ttnn_decode_forward(
+                        *transformed_inputs, kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
+                    )
                 )
-            )
+            else:
+                tt_out_trace.append(
+                    self.model[i].ttnn_decode_forward(
+                        *device_inputs[i], kv_cache=user_kv_cache, argmax_on_device=argmax_on_device
+                    )
+                )
             ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
         return trace_ids, tt_out_trace, *device_inputs
+# Note: This function is specific to the Mistral model
+    def _decode_forward_trace_text(
+        self,
+        trace_ids,
+        device_inputs,
+        tt_out_trace,
+        tokens,
+        current_pos,
+        page_table=None,
+    ):
+        """
+        Executes the trace for the decode_forward method but does not read back outputs.
+        """
+        host_inputs = []
+        for i in range(self.data_parallel):
+            user_page_table = page_table[i] if page_table is not None else None
+            host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
+            host_inputs.append(host_inputs_i)
+
+        to_device = []
+        for i in range(self.data_parallel):
+            to_device.append(
+                copy_host_to_device(
+                    host_tensors=host_inputs[i],
+                    device_tensors=device_inputs[i],
+                )
+            )
+        device_inputs = to_device
+        for i, trace_id in trace_ids.items():
+            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
+
+        return tt_out_trace
 
     def _easy_trace_text(
         self,
@@ -365,28 +472,38 @@ class Generator:
             self.trace_ids_text = trace_ids
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_trace
+        if model_name=="mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+            trace_logits_rm = self._decode_forward_trace_text(
+                self.trace_ids_text,
+                self.trace_inputs_text,
+                self.trace_output_text,
+                tokens,
+                current_pos,
+                page_table=page_table,
+            ) 
+            return trace_logits_rm
+        else:
+            reset_inputs = not argmax_on_device
+            if self.prev_page_table is None or any(
+                not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
+            ):
+                reset_inputs = True
+                self.prev_page_table = page_table
+            if reset_inputs:
+                for i in range(self.data_parallel):
+                    user_page_table = page_table[i] if page_table is not None else None
+                    host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
 
-        reset_inputs = not argmax_on_device
-        if self.prev_page_table is None or any(
-            not torch.equal(prev, curr) for prev, curr in zip(self.prev_page_table, page_table)
-        ):
-            reset_inputs = True
-            self.prev_page_table = page_table
+                    copy_host_to_device(
+                        host_tensors=host_inputs_i,
+                        device_tensors=self.trace_inputs_text[i],
+                    )
 
-        if reset_inputs:
-            for i in range(self.data_parallel):
-                user_page_table = page_table[i] if page_table is not None else None
-                host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], user_page_table)
+            for i, trace_id in self.trace_ids_text.items():
+                ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
 
-                copy_host_to_device(
-                    host_tensors=host_inputs_i,
-                    device_tensors=self.trace_inputs_text[i],
-                )
+            return self.trace_output_text
 
-        for i, trace_id in self.trace_ids_text.items():
-            ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
-
-        return self.trace_output_text
 
     def _prefill_forward_single_user(
         self,
