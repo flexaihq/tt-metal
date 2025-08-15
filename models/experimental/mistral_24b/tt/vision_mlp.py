@@ -1,4 +1,5 @@
-# SPDX-FileCopyrightText: Â© 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -57,7 +58,12 @@ class MistralTTVisionMLP(LightweightModule):
         self.w2 = as_tensor("w2", dtype)
         self.b2 = as_tensor("w2", ttnn.bfloat16, is_bias=False)
 
-        self.compute_kernel_config_hifi4 = self.args.compute_kernel_config_hifi4
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+            dst_full_sync_en=False,
+        )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -79,7 +85,7 @@ class MistralTTVisionMLP(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             activation="silu",
-            compute_kernel_config=self.compute_kernel_config_hifi4,
+            compute_kernel_config=self.compute_kernel_config,
         )
 
         w3_out = ttnn.linear(
@@ -87,7 +93,7 @@ class MistralTTVisionMLP(LightweightModule):
             self.w3,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
+            compute_kernel_config=self.compute_kernel_config,
         )
 
         # Element-wise multiply
@@ -99,7 +105,7 @@ class MistralTTVisionMLP(LightweightModule):
             self.w2,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
+            compute_kernel_config=self.compute_kernel_config,
         )
 
         ttnn.deallocate(w1_out)

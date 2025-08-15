@@ -1,6 +1,15 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+"""
+source: models/common/rmsnorm.py
+
+This is the modified version of the RMSNorm for the Mistral 24b model.
+
+We have modified the RMSNorm implementation equivalent to RMSNorm in the Mistral 24b model.
+"""
+
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -46,6 +55,7 @@ class RMSNorm(LightweightModule):
         weight_dtype=ttnn.bfloat16,
         is_distributed=None,
         eps: float = 1e-05,
+        add_unit_offset=False,
         sharded_program_config=None,
         sharded_output_config=None,
         output_mem_config=None,
@@ -67,17 +77,19 @@ class RMSNorm(LightweightModule):
         torch_weight = (
             state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
         )
-
+        if add_unit_offset:
+            torch_weight = torch_weight + 1.0
+        # # Add offset before caching
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
 
         # Compatibility with models that don't use mesh devices (e.g. single-chip Mistral-7b)
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
 
         self.weight = ttnn.as_tensor(
-            state_dict[weight_name].unsqueeze(0).view(1, 1, dim),
+            torch_weight,
             device=device,
             dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT if weight_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=weight_memory_config,
             cache_file_name=cache_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
@@ -88,7 +100,7 @@ class RMSNorm(LightweightModule):
                 torch_weight,
                 device=device,
                 dtype=weight_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 memory_config=weight_memory_config,
                 cache_file_name=cache_name,
                 mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
@@ -112,7 +124,7 @@ class RMSNorm(LightweightModule):
         program_config = self.sharded_program_config if in_sharded else None
         memory_config = self.sharded_output_config if out_sharded else None
         distributed = self.is_distributed and self.is_distributed(mode)
-        norm = self._distributed_rmsnorm if distributed else ttnn.rms_norm
+        norm = self._distributed_rmsnorm
         weight = self.weight_distributed if distributed else self.weight
 
         if in_sharded:
@@ -135,29 +147,23 @@ class RMSNorm(LightweightModule):
             return x
 
     def _distributed_rmsnorm(
-        self, inp, epsilon=None, weight=None, program_config=None, memory_config=None, compute_kernel_config=None
+        self, inp, epsilon=1e-5, weight=None, program_config=None, memory_config=None, compute_kernel_config=None
     ):
-        assert program_config is None, "Distributed RMSNorm does not support sharded inputs"
-        assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
+        inp = ttnn.sharded_to_interleaved(inp)
 
-        # Run distributed rmsnorm part 1
-        tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
-        # AllGather stats
-        tt_stats = ttnn.all_gather(
-            tt_stats,
-            dim=3,
-            num_links=1,
-            topology=self.ccl_topology,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # Run distributed rmsnorm part 2
-        tt_out = ttnn.rms_norm_post_all_gather(
-            inp,
-            tt_stats,
-            epsilon=epsilon,
-            weight=weight,
-            compute_kernel_config=compute_kernel_config,
-        )
-        tt_stats.deallocate(True)
+        xnorm = ttnn.pow(inp, 2)
 
-        return tt_out
+        xnorm = ttnn.mean(xnorm, dim=-1, keepdim=True)
+
+        xnorm = ttnn.rsqrt(xnorm + epsilon)
+
+        xnorm = ttnn.multiply(inp, xnorm)
+
+        weight = ttnn.reshape(weight, (1, 1, -1))
+
+        output = ttnn.multiply(xnorm, weight)
+
+        if memory_config is not None:
+            output = ttnn.to_memory_config(output, memory_config)
+
+        return output

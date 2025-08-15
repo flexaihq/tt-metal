@@ -34,8 +34,6 @@ class TtPixtralImageTransformerBlock(LightweightModule):
             weight_key="attention_norm",
             weight_dtype=dtype,
             is_distributed=False,
-            sharded_program_config=configuration.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
-            sharded_output_config=configuration.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         )
 
         self.attention = TtLlamaImageAttention(
@@ -55,8 +53,6 @@ class TtPixtralImageTransformerBlock(LightweightModule):
             weight_key="ffn_norm",
             weight_dtype=dtype,
             is_distributed=False,
-            sharded_program_config=configuration.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
-            sharded_output_config=configuration.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         )
 
         self.mlp = MLP(
@@ -70,10 +66,12 @@ class TtPixtralImageTransformerBlock(LightweightModule):
 
     def forward(self, x_input, mask=None, position_embeddings=None):
         mode = "prefill"
-        attn_out = self.attention(
-            self.attention_norm(x_input, mode=mode), position_embeddings=position_embeddings, mask=mask
-        )
+        # attention norm Input and result replicated
+        attn_norm_res = self.attention_norm(x_input, mode=mode)
+        # attention Input and results replicated
+        attn_out = self.attention(attn_norm_res, position_embeddings=position_embeddings, mask=mask)
         res = ttnn.add(x_input, attn_out, use_legacy=True)
-        mlp_out = self.mlp(self.ffn_norm(res, mode=mode))
+        ffn_norm_res = self.ffn_norm(res, mode=mode)
+        mlp_out = self.mlp(ffn_norm_res)
         out = ttnn.add(res, mlp_out)
         return out

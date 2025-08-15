@@ -7,9 +7,6 @@ import os
 import ttnn
 from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
-
-
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -55,51 +52,39 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    # print("partial_state_dict ", partial_state_dict)
-
     reference_model.load_state_dict(partial_state_dict)
 
-    tt_inner_norm = RMSNorm(
+    tt_model = RMSNorm(
         device=device,
         dim=1024,
         state_dict=state_dict,
         state_dict_prefix="vision_tower.transformer.layers.0.",
         weight_key="ffn_norm",
         weight_dtype=dtype,
-        is_distributed=tt_model_args.is_distributed_norm,
-        sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
-        sharded_output_config=tt_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
+        is_distributed=False,
     )
-
-    # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, tt_model_args, TG=tt_model_args.is_galaxy)
-
-    input = torch.rand(1, 1, 1024)
+    input = torch.load("real_inputs/pixtral_transformer_inputs/HF_PixtralTransformers/sub_layer_inputs/ffn_norm_0.pt")
 
     reference_output = reference_model(input)
 
-    # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
     tt_input = ttnn.from_torch(
         input,
         device=device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
-        memory_config=(
-            tt_model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device=device),
     )
 
     tt_output = tt_model(tt_input, mode=mode)
 
-    # DistributedNorm outputs are replicated across devices
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            device, dims=(0, 2) if tt_model_args.is_galaxy else (2, 0), mesh_shape=tt_model_args.cluster_shape
-        ),
-    )[:1, :, :]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=-1))[
+        :, : tt_output.shape[-1]
+    ]
 
+    logger.info(f"tt_output_torch: {tt_output_torch.shape}")
+
+    # print("Saving N300 results for Attention Norm rmsnorm...")
+    # torch.save(tt_output_torch, "real_inputs/pixtral_transformer_inputs/T3K_vs_N300_results/N300_ffn_norm_0.pt")
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
