@@ -44,7 +44,6 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     state_dict = model_args.load_state_dict()
 
     print("state_dict keys:", state_dict.keys())
-    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = "vision_tower.transformer.layers.0.feed_forward."
 
     partial_state_dict = {
@@ -62,41 +61,34 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         weight_cache_path=model_args.weight_cache_path(dtype),
         state_dict_prefix="vision_tower.transformer.layers.0.feed_forward.",
         dtype=dtype,
-        # model_config=model_args.get_model_config(),
     )
-    torch_input = torch.randn(1, 1, seq_len, 1024).to(torch.bfloat16)
-    print("torch_input shape:", torch_input.shape)
+    # torch_input = torch.randn(1, 1, seq_len, 1024).to(torch.bfloat16)
+    torch_input = torch.load(
+        "real_inputs/pixtral_transformer_inputs/HF_PixtralTransformers/sub_layer_inputs/ffn_mlp_0.pt"
+    )
+
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(None, 3) if model_args.is_galaxy else (None, None), mesh_shape=model_args.cluster_shape
-        ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat16,
-        memory_config=(
-            (
-                tt_model.model_config["MLP_ACT_MEMCFG"]
-                if model_args.is_galaxy
-                else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
-            )
-            if mode == "decode"
-            else ttnn.DRAM_MEMORY_CONFIG
-        ),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
 
     logger.info("Run MLP")
     tt_output = tt_model(tt_input)
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-    )
+    print("tt_output shape", tt_output.shape)
 
-    tt_output_torch = tt_output_torch[:, :1, :, :]
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
+        :, :, : tt_output.shape[-1]
+    ]
 
     pcc_required = 0.99
+    # print("Saving T3K output....")
+    # torch.save(tt_output_torch, "real_inputs/pixtral_transformer_inputs/T3K_vs_N300_results/T3K_ffn_0.pt")
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
