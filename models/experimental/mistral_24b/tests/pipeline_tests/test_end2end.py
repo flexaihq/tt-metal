@@ -114,7 +114,7 @@ def setup_vision_model_args(weights, max_seq_len, batch_size, mesh_device, optim
 
 def setup_vision_prompts_and_tokenizer(model_args, instruct):
     """Setup multimodal prompts and tokenizer for vision-enabled model."""
-    image_path = "real_inputs/pixtral_transformer_inputs/people.jpg"
+    image_path = "real_inputs/pixtral_transformer_inputs/demo_small.jpg"
     image = Image.open(image_path).convert("RGB")
     messages = [
         {
