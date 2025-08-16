@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
+from models.tt_transformers.tt.multimodal.mistral_24b.vision_model import TtMistralVisionTransformer
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
