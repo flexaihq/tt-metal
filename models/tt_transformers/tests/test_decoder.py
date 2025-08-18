@@ -59,7 +59,7 @@ def test_decoder_inference(
     reset_seeds,
     ensure_gc,
 ):
-    dtype = ttnn.bfloat8_b
+    dtype = ttnn.bfloat16
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
@@ -204,7 +204,9 @@ def test_decoder_inference(
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
         # Reference model
-        ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
+        ref_output = reference_model(pt_decode_input.to(dtype=torch.bfloat16), current_pos[0], freqs_cis_i, mask=None)
+        print("ref_output ", ref_output)
+        print("tt_output_torch ", tt_output_torch)
 
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 
@@ -218,7 +220,7 @@ def test_decoder_inference(
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,

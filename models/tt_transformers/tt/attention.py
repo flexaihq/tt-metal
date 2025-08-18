@@ -27,6 +27,7 @@ class Attention(LightweightModule):
         use_paged_kv_cache=False,
     ):
         super().__init__()
+        self.layer_num = layer_num
         self.is_sliding = configuration.sliding_window_pattern[layer_num]
 
         self.state_dict = state_dict
@@ -53,8 +54,8 @@ class Attention(LightweightModule):
             max(self.max_batch_size // self.num_device_groups, 1) if self.TG else self.max_batch_size
         )
 
-        self.n_local_heads = self.n_heads // self.num_devices_per_group
-        self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
+        self.n_local_heads = self.n_heads // self.num_devices_per_group  # 4
+        self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group  # 2
 
         self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
@@ -585,7 +586,7 @@ class Attention(LightweightModule):
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b if self.TG else None,
+                dtype=ttnn.bfloat8_b if self.TG else ttnn.bfloat16,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
             )
 
@@ -773,7 +774,7 @@ class Attention(LightweightModule):
             ttnn.deallocate(v_fill)
 
         # SDPA
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
+        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat16)
         ttnn.deallocate(q_heads_1QSD)
 
         if chunk_start_idx is not None:
@@ -830,7 +831,7 @@ class Attention(LightweightModule):
             attn_output_11SH,
             self.wo,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
-            dtype=self.activation_dtype or ttnn.bfloat8_b,
+            dtype=self.activation_dtype or ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )

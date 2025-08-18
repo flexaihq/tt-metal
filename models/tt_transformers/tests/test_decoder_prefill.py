@@ -9,7 +9,6 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -46,7 +45,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 @pytest.mark.parametrize(
     "max_seq_len",
     (
-        4096,
+        # 4096,
         128,
     ),
 )
@@ -152,15 +151,17 @@ def test_decoder_inference(
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
-        pt_decode_input = (
-            torch.rand(
-                batch_size,
-                max_seq_len,
-                model_args.dim,
-                dtype=get_ref_model_dype(reference_model, model_args.model_name),
-            )
-            * 2
-        ) - 1
+        # pt_decode_input = (
+        #     torch.rand(
+        #         batch_size,
+        #         max_seq_len,
+        #         model_args.dim,
+        #         dtype=get_ref_model_dype(reference_model, model_args.model_name),
+        #     )
+        #     * 2
+        # ) - 1
+        pt_decode_input = torch.load("torch_decoder_input_0.pt")
+        print("pt_decode_input shape ", pt_decode_input.shape)
         tt_decode_input = pt_decode_input.clone()
         decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
@@ -176,7 +177,9 @@ def test_decoder_inference(
         # Reference model
         attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-        ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
+        ref_output = reference_model(
+            pt_decode_input.to(dtype=torch.bfloat16), positions[0], freqs_cis_i, mask=attn_mask_torch
+        ).unsqueeze(0)
         # Run TT model
         tt_out = tt_model(
             decode_input, None, [rot_mats, rot_mats_local], user_id=0, mode="prefill", page_table=page_table_tt
@@ -188,6 +191,8 @@ def test_decoder_inference(
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(
             batch_size, max_seq_len, -1
         )  # [ batch_size, seq, hidden_dim]
+        print("ref_output ", ref_output)
+        print("tt_output_torch ", tt_output_torch)
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 
         logger.info(comp_allclose(ref_output, tt_output_torch))

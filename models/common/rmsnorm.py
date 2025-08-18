@@ -45,7 +45,7 @@ class RMSNorm(LightweightModule):
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         weight_dtype=ttnn.bfloat16,
         is_distributed=None,
-        eps: float = 1e-05,
+        eps: float = 1e-06,
         add_unit_offset=False,
         sharded_program_config=None,
         sharded_output_config=None,
@@ -85,7 +85,7 @@ class RMSNorm(LightweightModule):
             torch_weight,
             device=device,
             dtype=weight_dtype,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=weight_memory_config,
             cache_file_name=cache_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
@@ -96,7 +96,7 @@ class RMSNorm(LightweightModule):
                 torch_weight,
                 device=device,
                 dtype=weight_dtype,
-                layout=ttnn.TILE_LAYOUT,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=weight_memory_config,
                 cache_file_name=cache_name,
                 mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, 2), mesh_shape=list(device.shape))
@@ -128,10 +128,10 @@ class RMSNorm(LightweightModule):
         else:
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
 
-        if x.shape[-1] % weight.shape[-1] == 0:
-            # Reshape weight only if x's last dimension is divisible by weight's last dimension,
-            # to avoid padding errors in RMSNorm when dimensions are not aligned
-            weight = ttnn.reshape(weight, [1, 1, 1, -1])
+        # if x.shape[-1] % weight.shape[-1] == 0:
+        #     # Reshape weight only if x's last dimension is divisible by weight's last dimension,
+        #     # to avoid padding errors in RMSNorm when dimensions are not aligned
+        #     weight = ttnn.reshape(weight, [1, 1, 1, -1])
 
         x = norm(
             x,
