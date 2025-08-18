@@ -64,14 +64,7 @@ def test_conv2d_inference(
     input_tensor = torch.randn((B, NCH, H, W))
     logger.info(f"Input tensor shape: {input_tensor.shape}")
 
-    ##### Perform the torch ops #####
-    # reference_model = llama_reference_mod.ColumnParallelConv2dPatch(
-    #     in_channels=in_channels,
-    #     out_channels=out_channels,
-    #     kernel_size=kernel_size,
-    #     stride=stride,
-    #     bias=bias,
-    # )
+   
     reference_model = model_args.reference_conv2d_patch()
     reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor)
@@ -98,7 +91,7 @@ def test_conv2d_inference(
 
     # 1. Restore batch dim
     tt_output_torch = tt_output_torch.unsqueeze(0)
-    # 1 1024 4096
+    
     # 2. Permute to match Conv2D output: (N, C_out, H_out, W_out)
     tt_output_torch = tt_output_torch.permute(0, 2, 1).reshape(1, 1024, 64, 64)
 

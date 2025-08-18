@@ -304,7 +304,7 @@ def test_multimodal_demo_text(
                 prompt_encoder(dialog, processor) if HF_MODEL else prompt_encoder(dialog, tool_prompt_format=False)
                 for dialog in batch_dialogs
             ]
-
+            
             if HF_MODEL:
                 # Use the processor's tokenizer instead of model_args tokenizer to ensure consistency
                 tokenizer = processor.tokenizer
@@ -489,7 +489,7 @@ def test_multimodal_demo_text(
 
         target_decode_tok_s_u = {
             "N300_Llama-3.2-11B": 21.5,
-            "T3K_Llama-3.2-11B": 33,
+            "T3K_Llama-3.2-11B": 35,
             "T3K_Llama-3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]
 
