@@ -69,9 +69,6 @@ class MistralTTVisionMLP(LightweightModule):
             w2 -> down_proj
         """
 
-        # if x.shape[-2] >= self.args.prefill_len_cutoff and mode != "decode":
-        #     x = ttnn.reshape(x, [1, x.shape[-2] // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
-
         # Linear with SILU activation
         w1_out = ttnn.linear(
             x,

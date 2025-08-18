@@ -53,11 +53,7 @@ def test_rot_emb(seq_len, batch_size, use_program_cache, reset_seeds, device):
     num_patches_per_dim = image_size // patch_size
     num_patches = num_patches_per_dim * num_patches_per_dim
 
-    print("image_size:", image_size)
-    print("patch_size:", patch_size)
-    print("dim:", dim)
-    print("num_patches_per_dim:", num_patches_per_dim)
-    print("num_patches:", num_patches)
+
 
     position_ids = torch.arange(4096, dtype=torch.long)
 

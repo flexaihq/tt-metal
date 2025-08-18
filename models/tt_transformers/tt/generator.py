@@ -314,7 +314,7 @@ class Generator:
         tt_rot_mat_idxs_local = []
         tt_page_table = []
         tt_rot_mat_idxs_global = []
-
+        tt_rot_mats=[]
         tt_rot_mat_idxs_local = []
 
         for i in range(self.data_parallel):

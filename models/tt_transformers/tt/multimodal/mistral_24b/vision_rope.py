@@ -71,7 +71,7 @@ class VisionRotarySetup(LightweightModule):
     def get_rot_mats(self, position_idxs, return_rot_idxs=False):
         device = self.device
 
-        # return self.cos_matrix, self.sin_matrix
+        
         # If position_idxs is a torch tensor, get the TTNN version of it
         if isinstance(position_idxs, torch.Tensor):
             rot_idxs = position_idxs.unsqueeze(0)

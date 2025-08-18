@@ -62,7 +62,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         weight_cache_path=model_args.weight_cache_path(dtype),
         state_dict_prefix="vision_tower.transformer.layers.0.feed_forward.",
         dtype=dtype,
-        # model_config=model_args.get_model_config(),
+       
     )
     torch_input = torch.randn(1, 1, seq_len, 1024).to(torch.bfloat16)
     print("torch_input shape:", torch_input.shape)

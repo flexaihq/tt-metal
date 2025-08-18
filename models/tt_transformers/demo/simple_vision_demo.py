@@ -304,13 +304,6 @@ def test_multimodal_demo_text(
                 prompt_encoder(dialog, processor) if HF_MODEL else prompt_encoder(dialog, tool_prompt_format=False)
                 for dialog in batch_dialogs
             ]
-            
-            if HF_MODEL:
-                # Use the processor's tokenizer instead of model_args tokenizer to ensure consistency
-                tokenizer = processor.tokenizer
-                image_grid_thw = [model_input.image_grid_thw for model_input in batch_model_input]
-            else:
-                image_grid_thw = None
 
             # Do initial prefill
             vision_images = [
@@ -348,7 +341,7 @@ def test_multimodal_demo_text(
                         xattn_caches,
                         total_lens,
                         prefill_lens,
-                        image_grid_thw=image_grid_thw,
+                        
                     )
 
             # Get cached prefill time
@@ -366,7 +359,7 @@ def test_multimodal_demo_text(
                     xattn_caches,
                     total_lens,
                     prefill_lens,
-                    image_grid_thw=image_grid_thw,
+                    
                 )
 
             prefill_end = time.perf_counter()
@@ -413,11 +406,8 @@ def test_multimodal_demo_text(
                 )  # gen_idx is (num_tokens - 1) to avoid counting compile iter
 
             # Log full text output for each user in batch
-            if HF_MODEL:
-                # For HF models, get vision tokens from the processor if they exist
-                vision_tokens = []
-            else:
-                vision_tokens = [tokenizer.special_tokens["<|image|>"], 128256]
+            
+            vision_tokens = [tokenizer.special_tokens["<|image|>"], 128256]
 
             for user_id in range(max_batch_size):
                 # Remove <|image|> tokens since they break the tokenizer

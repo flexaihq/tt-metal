@@ -34,7 +34,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     (1,),
 )
 def test_vision_attention(mesh_device, seq_len, batch_size):
-    logger.info(f"seq_len: {seq_len}, batch_size: {batch_size}")
+
     dtype = ttnn.bfloat8_b
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
@@ -71,16 +71,13 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
     cos = torch.ones((1, T, head_dim)).to(torch.bfloat16)
     sin = torch.zeros((1, T, head_dim)).to(torch.bfloat16)
 
-    # attention_mask = torch.load("ref_attention_mask.pt")
-    # pt_attention_input = torch.load("ref_patch_embeds.pt")
-    # position_embeddings = torch.load("ref_position_embeddings.pt")
+    
 
     attention_input = model_args.prepare_residual_tensor_prefill(
         pt_attention_input,
         force_replicated=True,
     )
 
-    # cos, sin = position_embeddings
 
     cos_t = ttnn.from_torch(
         cos,

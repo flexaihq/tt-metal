@@ -24,14 +24,12 @@ class HostEmbedding(torch.nn.Module):
     def forward(self, x):
         return self.emb(x)
 
-if model_name!="mistralai/Mistral-Small-3.1-24B-Instruct-2503":
-    class HostScaledEmbedding(HostEmbedding):
-        def __init__(self, model_args):
-            super().__init__(model_args)
-            self.embed_scale = model_args.embed_scale
-        def forward(self, x):
-            return self.emb(x) * self.embed_scale
-
+class HostScaledEmbedding(HostEmbedding):
+    def __init__(self, model_args):
+        super().__init__(model_args)
+        self.embed_scale = model_args.embed_scale
+    def forward(self, x):
+        return self.emb(x) * self.embed_scale
 # Default configuration for Paged Attention
 class PagedAttentionConfig:
     def __init__(self, block_size=32, max_num_blocks=1024):

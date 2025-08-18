@@ -6,7 +6,7 @@ It brings together all components related to visual and MultiModalProjector toge
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.multimodal.mistral_24b.pipeline.mistral_vision_tower import MistralVisionTower
+from models.tt_transformers.tt.multimodal.mistral_24b.mistral_vision_tower import MistralVisionTower
 from models.tt_transformers.tt.multimodal.mistral_24b.vision_mmp import TTMistral3MultiModalProjector
 
 

@@ -51,7 +51,6 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    # print("partial_state_dict ", partial_state_dict)
 
     reference_model.load_state_dict(partial_state_dict)
 

@@ -71,19 +71,6 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
 
     position_embeddings = (cos, sin)
 
-    # attention_mask = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_attention_mask.pt")
-    # pt_attention_input = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_transformer.pt")
-    # position_embeddings = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_position_embeddings.pt")
-
-    # position_embeddings_updated = []
-    # for pe in position_embeddings:
-    #     pe = pe.unsqueeze(0)
-    #     position_embeddings_updated.append(pe)
-
-    # print("Loaded real inputs")
-    # print("pt_attention_input", pt_attention_input.shape)
-    # print("attention_mask", attention_mask.shape)
-    # print("position_embeddings", position_embeddings_updated[0].shape)
 
     cos, sin = position_embeddings
 
