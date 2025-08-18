@@ -2,13 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
+import os
 
-
+model_name = os.getenv("HF_MODEL")
 class DistributedNorm(LightweightModule):
-    def __init__(self, norm, args, tt_ccl, TG=False):
+    def __init__(self, norm, args,tt_ccl=None, TG=False):
         self.norm = norm
         self.args = args
         self.tt_ccl = tt_ccl
@@ -69,11 +72,20 @@ class DistributedNorm(LightweightModule):
                     compute_kernel_config=self.ln_cfg,
                 )
 
-        input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        model_name = os.getenv("HF_MODEL")
+        if model_name == "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+            input_mem_cfg = (
+                self.norm.sharded_output_config
+                if (mode == "decode" and self.norm.sharded_output_config is not None)
+                else ttnn.DRAM_MEMORY_CONFIG
+            )
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
-            x = ttnn.experimental.all_gather_async(
+            if model_name=="mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+                x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg) # mistral 24B specific operation
+            else:
+                x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
                 dim=3,
@@ -93,7 +105,10 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm requires a gather
         if self.args.is_distributed_norm(mode):
-            x = ttnn.experimental.all_gather_async(
+            if model_name == "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+                x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology())
+            else:
+                x = ttnn.experimental.all_gather_async(
                 x,
                 persistent_output_buffer=None,
                 dim=3,
