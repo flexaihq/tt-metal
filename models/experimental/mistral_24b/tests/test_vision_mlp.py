@@ -43,7 +43,6 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
-    print("state_dict keys:", state_dict.keys())
     first_layer_prefix = "vision_tower.transformer.layers.0.feed_forward."
 
     partial_state_dict = {
@@ -51,7 +50,6 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     }
 
     reference_model = model_args.reference_vision_mlp()
-    print(partial_state_dict.keys())
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = MLP(
@@ -62,10 +60,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         state_dict_prefix="vision_tower.transformer.layers.0.feed_forward.",
         dtype=dtype,
     )
-    # torch_input = torch.randn(1, 1, seq_len, 1024).to(torch.bfloat16)
-    torch_input = torch.load(
-        "real_inputs/pixtral_transformer_inputs/HF_PixtralTransformers/sub_layer_inputs/ffn_mlp_0.pt"
-    )
+    torch_input = torch.randn(1, 1, seq_len, 1024).to(torch.bfloat16)
 
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
@@ -80,15 +75,10 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
     logger.info("Run MLP")
     tt_output = tt_model(tt_input)
 
-    print("tt_output shape", tt_output.shape)
-
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
-        :, :, : tt_output.shape[-1]
+        :, :, :, :1024
     ]
-
     pcc_required = 0.99
-    # print("Saving T3K output....")
-    # torch.save(tt_output_torch, "real_inputs/pixtral_transformer_inputs/T3K_vs_N300_results/T3K_ffn_0.pt")
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

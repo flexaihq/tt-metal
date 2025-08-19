@@ -268,11 +268,7 @@ def map_vision_meta_to_hf_keys(loaded_weights):
     You can use this to support other models by adding more mappings.
     See replace_keys for more details on the format of replacements.
     """
-    inverted_mapping = [
-        # ("attention_norm", "input_layernorm"),
-        # ("ffn_norm", "post_attention_layernorm"),
-        # ("attention", "self_attn"),
-        # ("feed_forward", "mlp"),
+    base_mapping = [
         ("w1", "gate_proj"),
         ("w2", "down_proj"),
         ("w3", "up_proj"),
@@ -282,7 +278,20 @@ def map_vision_meta_to_hf_keys(loaded_weights):
         ("wo", "o_proj"),
     ]
 
-    return replace_keys(loaded_weights, inverted_mapping)
+    extra_mapping = [
+        ("attention_norm", "input_layernorm"),
+        ("ffn_norm", "post_attention_layernorm"),
+        ("attention", "self_attn"),
+        ("feed_forward", "mlp"),
+    ]
+
+    model_name = os.getenv("HF_MODEL")
+    if "Mistral" in model_name:
+        mapping = base_mapping
+    else:
+        mapping = base_mapping + extra_mapping
+
+    return replace_keys(loaded_weights, mapping)
 
 
 def convert_vision_meta_to_hf(state_dict, head_dim):

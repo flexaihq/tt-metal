@@ -61,13 +61,10 @@ class MistralTransformer(Transformer):
 
         if pixel_values is not None:
             vision_model = kwargs["vision_model"]
-            # pixel_values = torch.load("real_inputs/pixtral_transformer_inputs/Final_experiments/pixel_values.pt")
-            # image_sizes = torch.load("real_inputs/pixtral_transformer_inputs/Final_experiments/image_sizes.pt")
             vision_output = vision_model(pixel_values, image_sizes)
             vision_output_torch = ttnn.to_torch(
                 vision_output, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1)
             )[:, : vision_output.shape[-1]]
-            # torch.save(vision_output_torch, "real_inputs/vision_output_torch.pt")
             tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1))
             sliced_token_embds = tokens_embd[: tokens_embd.shape[0]]
 
@@ -81,8 +78,6 @@ class MistralTransformer(Transformer):
             special_image_mask = special_image_mask.expand_as(tokens_embd)
             image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
             tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
-
-            # tokens_embd = torch.load("real_inputs/torch_inputs_embeds_from_TM.pt").squeeze(0)
 
             tokens_embd = ttnn.from_torch(
                 tokens_embd,

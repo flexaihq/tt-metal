@@ -33,7 +33,6 @@ class TtPixtralTransformer(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 dtype=dtype,
                 configuration=configuration,
-                layer_num=i,
             )
             for i in tqdm(range(layers), desc=f"Loading vision transformer layers")
         ]

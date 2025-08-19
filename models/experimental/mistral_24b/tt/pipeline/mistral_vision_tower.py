@@ -73,6 +73,7 @@ class MistralVisionTower(LightweightModule):
             weight_dtype=dtype,
             weight_key="ln_pre",
             is_distributed=False,
+            simplified_rms=True,
         )
 
         image_size = configuration.vision_image_size

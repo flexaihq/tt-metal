@@ -27,7 +27,6 @@ from ttnn import ConcatMeshToTensor
 )
 def test_conv2d_inference(
     mesh_device,
-    use_program_cache,
     reset_seeds,
 ):
     pcc_required = 0.9999
@@ -61,17 +60,9 @@ def test_conv2d_inference(
     assert W % kernel_size == 0, "Width should be divisible by kernel_size."
 
     ##### Prepare inputs #####
-    input_tensor = torch.randn((B, NCH, H, W))
+    input_tensor = torch.randn((B, NCH, H, W)).to(dtype=torch.bfloat16)
     logger.info(f"Input tensor shape: {input_tensor.shape}")
 
-    ##### Perform the torch ops #####
-    # reference_model = llama_reference_mod.ColumnParallelConv2dPatch(
-    #     in_channels=in_channels,
-    #     out_channels=out_channels,
-    #     kernel_size=kernel_size,
-    #     stride=stride,
-    #     bias=bias,
-    # )
     reference_model = model_args.reference_conv2d_patch()
     reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor)

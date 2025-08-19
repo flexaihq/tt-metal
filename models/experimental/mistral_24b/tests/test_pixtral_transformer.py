@@ -70,35 +70,6 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
     cos = torch.ones((1, T, head_dim)).to(torch.bfloat16)
     sin = torch.zeros((1, T, head_dim)).to(torch.bfloat16)
 
-    position_embeddings = (cos, sin)
-
-    attention_mask = torch.load(
-        "real_inputs/pixtral_transformer_inputs/vision_model_input_dumps/PixtralTransformer_attention_mask.pt"
-    )
-    pt_attention_input = torch.load(
-        "real_inputs/pixtral_transformer_inputs/vision_model_input_dumps/PixtralTransformer_patch_embeds.pt"
-    )
-    position_embeddings = torch.load(
-        "real_inputs/pixtral_transformer_inputs/vision_model_input_dumps/PixtralTransformer_position_embeddings.pt"
-    )
-
-    print("Loaded real inputs")
-    print("pt_attention_input", pt_attention_input.shape)
-    print("attention_mask", attention_mask.shape)
-    print("position_embeddings", position_embeddings[0].shape)
-
-    # position_embeddings_updated = []
-    # for pe in position_embeddings:
-    #     pe = pe.unsqueeze(0)
-    #     position_embeddings_updated.append(pe)
-
-    # print("Loaded real inputs")
-    # print("pt_attention_input", pt_attention_input.shape)
-    # print("attention_mask", attention_mask.shape)
-    # print("position_embeddings", position_embeddings_updated[0].shape)
-
-    cos, sin = position_embeddings
-
     cos_t = ttnn.from_torch(
         cos,
         device=mesh_device,
@@ -138,11 +109,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
         tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
             : tt_out.shape[0]
         ]
-
         tt_output_torch = tt_output_torch.squeeze(0)
-
-        # print("Saving Results on N300.....")
-        # torch.save(tt_output_torch, "real_inputs/pixtral_transformer_inputs/vision_model_input_dumps/PixtralTransformer_N300_output.pt")
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
         if not passing:
             logger.warning(f"PCC value -- {pcc_message} -- is lower than {pcc_required} for the output.")

@@ -43,8 +43,6 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if k.startswith(first_layer_prefix)
     }
 
-    print("partial_state_dict keys:", partial_state_dict.keys())
-
     ##### Reference model output (Torch) #####
     reference_model = model_args.reference_vision_model()
     reference_model.load_state_dict(partial_state_dict)
@@ -55,15 +53,12 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
         k[len(mmp_first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(mmp_first_layer_prefix))
     }
 
-    print("mmp_partial_state_dict keys:", mmp_partial_state_dict.keys())
-
     reference_mmp = model_args.reference_vision_multi_modal()
     reference_mmp.load_state_dict(mmp_partial_state_dict)
 
     B, C, H, W = 1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size
     input_tensor = torch.rand((B, C, H, W), dtype=torch.bfloat16)
 
-    # reference_output = reference_model(input_tensor, image_sizes=[(H, W)])
     reference_output = get_image_features(reference_model, reference_mmp, input_tensor, image_sizes=[(H, W)])
 
     # ##### TT Model: TtMistralVisionTransformer #####
@@ -76,8 +71,9 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
     )
 
     tt_output = vision_model(input_tensor, image_sizes=[(H, W)])  # [0]
-    tt_output = ttnn.from_device(tt_output)
-    tt_output = ttnn.to_torch(tt_output)
+    tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
+        :, : tt_output.shape[-1]
+    ]
 
     non_zero_indices = tt_output.ne(0).nonzero(as_tuple=True)
     tt_output = tt_output[non_zero_indices]

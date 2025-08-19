@@ -62,8 +62,9 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
         weight_key="ffn_norm",
         weight_dtype=dtype,
         is_distributed=False,
+        simplified_rms=True,
     )
-    input = torch.load("real_inputs/pixtral_transformer_inputs/HF_PixtralTransformers/sub_layer_inputs/ffn_norm_0.pt")
+    input = torch.rand(batch_size, seq_len, 1024)
 
     reference_output = reference_model(input)
 
@@ -82,9 +83,6 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     ]
 
     logger.info(f"tt_output_torch: {tt_output_torch.shape}")
-
-    # print("Saving N300 results for Attention Norm rmsnorm...")
-    # torch.save(tt_output_torch, "real_inputs/pixtral_transformer_inputs/T3K_vs_N300_results/N300_ffn_norm_0.pt")
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

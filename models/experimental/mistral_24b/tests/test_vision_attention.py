@@ -65,33 +65,13 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
         configuration=model_args,
     )
 
-    # dim = model_args.vision_dim
-    # pt_attention_input = torch.randn(batch_size, 192, dim).to(torch.bfloat16)
-    # attention_mask = torch.zeros(batch_size, 1, 192, seq_len).to(torch.bfloat16)
+    dim = model_args.vision_dim
+    pt_attention_input = torch.randn(batch_size, seq_len, dim).to(torch.bfloat16)
+    attention_mask = torch.zeros(batch_size, 1, seq_len, seq_len).to(torch.bfloat16)
 
-    # B, T, D = pt_attention_input.shape
-    # cos = torch.ones((1, T, head_dim)).to(torch.bfloat16)
-    # sin = torch.zeros((1, T, head_dim)).to(torch.bfloat16)
-
-    # attention_mask = torch.load("real_inputs/pixtral_transformer_inputs/HF_PixtralTransformers/sub_layer_inputs/attention_mask_0.pt")
-    # pt_attention_input = torch.load("real_inputs/pixtral_transformer_inputs/HF_PixtralTransformers/sub_layer_inputs/attention_0.pt")
-    # position_embeddings = torch.load("real_inputs/pixtral_transformer_inputs/HF_PixtralTransformers/sub_layer_inputs/position_embeddings_0.pt")
-
-    pt_attention_input = torch.load(
-        "real_inputs/pixtral_transformer_inputs/TT_PixtralTransformers_Layerwise_result/tt_sub_layer_results_n300/ttnn_attn_norm_1_res.pt"
-    )
-    pt_attention_input = pt_attention_input.squeeze(0)
-    attention_mask = torch.load(
-        "real_inputs/pixtral_transformer_inputs/TT_PixtralTransformers_Layerwise_result/attention_inputs/ttnn_torch_mask.pt"
-    )
-    attention_mask = attention_mask[0]
-    position_embeddings = torch.load(
-        "real_inputs/pixtral_transformer_inputs/TT_PixtralTransformers_Layerwise_result/attention_inputs/ttnn_position_embeddings.pt"
-    )
-
-    print("pt_attention_input.shape", pt_attention_input.shape)
-    print("attention_mask.shape", attention_mask.shape)
-    print("position_embeddings[0].shape", position_embeddings[0].shape)
+    B, T, D = pt_attention_input.shape
+    cos = torch.ones((1, T, head_dim)).to(torch.bfloat16)
+    sin = torch.zeros((1, T, head_dim)).to(torch.bfloat16)
 
     # attention_input = model_args.prepare_residual_tensor_prefill(
     #     pt_attention_input,
@@ -106,8 +86,6 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
-
-    cos, sin = position_embeddings
 
     cos_t = ttnn.from_torch(
         cos,
@@ -144,8 +122,6 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
     reference_output = reference_model(pt_attention_input, attention_mask, position_embeddings=(cos, sin))[0]
     pcc_required = 0.99
 
-    # print("Saving T3K tt_output_torch....")
-    # torch.save(tt_output_torch, "real_inputs/pixtral_transformer_inputs/T3K_vs_N300_results/T3K_attention_0.pt")
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))

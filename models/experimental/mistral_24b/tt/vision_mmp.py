@@ -116,6 +116,8 @@ class TTMistral3MultiModalProjector(LightweightModule):
             weight_key="norm",
             weight_dtype=dtype,
             eps=eps,
+            is_distributed=False,
+            simplified_rms=True,
         )
 
         self.patch_merger = TTMistral3PatchMerger(

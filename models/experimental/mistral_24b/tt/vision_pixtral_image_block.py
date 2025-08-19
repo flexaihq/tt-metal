@@ -19,14 +19,11 @@ class TtPixtralImageTransformerBlock(LightweightModule):
         weight_cache_path,
         dtype,
         configuration,
-        layer_num,
     ):
         super().__init__()
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.layer_num = layer_num
         self.configuration = configuration
-        self.configuration.layer_num = layer_num
         self.num_devices = configuration.num_devices
         self.hidden_size = configuration.vision_dim
 
@@ -38,6 +35,7 @@ class TtPixtralImageTransformerBlock(LightweightModule):
             weight_key="attention_norm",
             weight_dtype=dtype,
             is_distributed=False,
+            simplified_rms=True,
         )
 
         self.attention = TtLlamaImageAttention(
@@ -57,6 +55,7 @@ class TtPixtralImageTransformerBlock(LightweightModule):
             weight_key="ffn_norm",
             weight_dtype=dtype,
             is_distributed=False,
+            simplified_rms=True,
         )
 
         self.mlp = MLP(

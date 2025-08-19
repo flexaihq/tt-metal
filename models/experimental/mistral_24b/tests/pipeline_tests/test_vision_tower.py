@@ -53,8 +53,10 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
     )
 
     tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
-    tt_output = ttnn.from_device(tt_output)
-    tt_output = ttnn.to_torch(tt_output).squeeze(0)
+    tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
+        :, :, :, : tt_output.shape[-1]
+    ]
+    tt_output = tt_output.squeeze(0)
     passing, pcc_message = comp_pcc(reference_output, tt_output, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output))
