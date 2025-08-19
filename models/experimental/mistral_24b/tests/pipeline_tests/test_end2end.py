@@ -3,7 +3,6 @@
 import torch
 import pytest
 from loguru import logger
-from PIL import Image
 import os
 import ttnn
 
@@ -114,15 +113,12 @@ def setup_vision_model_args(weights, max_seq_len, batch_size, mesh_device, optim
 
 def setup_vision_prompts_and_tokenizer(model_args, instruct):
     """Setup multimodal prompts and tokenizer for vision-enabled model."""
-    image_path = "real_inputs/pixtral_transformer_inputs/demo_small.jpg"
-    image = Image.open(image_path).convert("RGB")
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": image},
-                # "image": "https://raw.githubusercontent.com/yavuzceliker/sample-images/refs/heads/main/images/image-1.jpg",
-                {"type": "text", "text": "Tell me what you see in the picture?"},
+                {"type": "image", "image": "https://www.theeducationmagazine.com/wp-content/uploads/2020/03/18.jpg"},
+                {"type": "text", "text": "Tell me who you see in the image and describe the image ?"},
             ],
         }
     ]
@@ -413,7 +409,7 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (1024,),  # Use smaller seq_len like test_end2end.py to avoid memory issues
+    (1024 * 8,),  # Use smaller seq_len like test_end2end.py to avoid memory issues
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -508,7 +504,7 @@ def test_e2e_vision_text_pipeline(
     # Run generation following EXACT test_end2end.py pattern
     logger.info("Running generation following EXACT test_end2end.py pattern...")
     results = run_generation_exactly_like_test_end2end(
-        vision_model, text_model, processed_inputs, model_args, page_table, paged_attention_config, max_gen_len=600
+        vision_model, text_model, processed_inputs, model_args, page_table, paged_attention_config, max_gen_len=1024 * 4
     )
 
     # Validate results

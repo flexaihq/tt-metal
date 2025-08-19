@@ -137,7 +137,7 @@ class TtMistralImageAttention(LightweightModule):
             dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name("wqkv_sharded"),
+            # cache_file_name=cache_name("wqkv_sharded"),
         )
 
         self.wo = ttnn.as_tensor(
@@ -151,7 +151,7 @@ class TtMistralImageAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=cache_name("wo_sharded"),
+            # cache_file_name=cache_name("wo_sharded"),
         )
 
         self.scale = self.head_dim**-0.5

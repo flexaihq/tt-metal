@@ -194,7 +194,10 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     """Convert HuggingFace QKV weights to Meta format for RoPE compatibility."""
     converted_weights = {}
     for key, tensor in loaded_weights.items():
-        if "q_proj.weight" in key or "k_proj.weight" in key:
+        if "vision_tower" in key:
+            # Skip conversion for vision tower weights
+            converted_weights[key] = tensor
+        elif "q_proj.weight" in key or "k_proj.weight" in key:
             # For weights: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
@@ -266,10 +269,10 @@ def map_vision_meta_to_hf_keys(loaded_weights):
     See replace_keys for more details on the format of replacements.
     """
     inverted_mapping = [
-        ("attention_norm", "input_layernorm"),
-        ("ffn_norm", "post_attention_layernorm"),
-        ("attention", "self_attn"),
-        ("feed_forward", "mlp"),
+        # ("attention_norm", "input_layernorm"),
+        # ("ffn_norm", "post_attention_layernorm"),
+        # ("attention", "self_attn"),
+        # ("feed_forward", "mlp"),
         ("w1", "gate_proj"),
         ("w2", "down_proj"),
         ("w3", "up_proj"),
