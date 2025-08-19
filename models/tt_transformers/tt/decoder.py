@@ -176,7 +176,7 @@ class TransformerBlock(LightweightModule):
         print("TTNN Attention Norm Input ", x)
         attn_in = self.attention_norm(x, mode)
         print("TTNN Attention Norm Output ", attn_in)
-
+        # return attn_in
         # Attention takes replicated inputs and produces fractured outputs
         if self.attention.is_sliding:
             position_embeddings = rot_mats[1]
@@ -197,7 +197,20 @@ class TransformerBlock(LightweightModule):
             kv_cache=kv_cache,
         )
         print("TTNN Attention Output  ", attn_out)
+        # return
+        # D = attn_out.shape[-1]*8
+        # torch_attn_out = ttnn.to_torch(
+        #     attn_out,
+        #     mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+        # )
+        # torch_attn_out = torch_attn_out[:,:,:,:D]
 
+        # with open("T3k_attn_output_torch.txt", "a") as f:
+        #     f.write("=== Flatten attn output ===\n")
+        #     for i, val in enumerate(torch_attn_out.flatten().tolist()):
+        #         f.write(f"Index {i:4d} | {val:.6f}\n")
+
+        # exit()
         if self.pre_ff_norm == None:
             attn_out = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
 
@@ -251,10 +264,10 @@ class TransformerBlock(LightweightModule):
         if TG and mode == "decode":
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
-        print("TTNN  ff norm Input  ", hidden_states)
+        print("TTNN  ff  Input  ", hidden_states)
 
         hidden_states = self.feed_forward.forward(hidden_states, mode)
-        print("TTNN  ff norm output  ", hidden_states)
+        print("TTNN  ff  output  ", hidden_states)
 
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION

@@ -121,7 +121,9 @@ def tt_all_gather(
     dtype=ttnn.bfloat16,
 ):
     # N150
+    print("TT All gather invoked")
     if list(mesh_device.shape) == (1, 1) or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
+        print("All gather returning input_tensor as it is ")
         return input_tensor
 
     # Ensure the input tensor is in the correct memory configuration
@@ -135,6 +137,7 @@ def tt_all_gather(
             input_tensor = ttnn.to_memory_config(input_tensor, memory_config, dtype)  # to sharded
 
     if cluster_axis is None:
+        print("all_gather without cluster Axis Input ", input_tensor)
         gathered = ttnn.all_gather(
             input_tensor,
             dim,
@@ -142,7 +145,10 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
         )
+        print("All_gather without cluster Axis Output ", gathered)
     else:
+        print("all_gather with cluster Axis Input ", input_tensor)
+
         gathered = ttnn.all_gather(
             input_tensor,
             dim,
@@ -152,6 +158,8 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
         )
+        print("All_gather with cluster Axis Output ", gathered)
+
     input_tensor.deallocate(True)
     return gathered
 

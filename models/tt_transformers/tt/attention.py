@@ -395,6 +395,8 @@ class Attention(LightweightModule):
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
 
+        print("TT Inside Attention input  ", x)
+
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -404,6 +406,8 @@ class Attention(LightweightModule):
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
             dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
         )
+
+        print("TT Inside output  xqkv_fused_sharded ", xqkv_fused_sharded)
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
             # select the bias tensor based on the number of tiles in the rows
@@ -412,6 +416,7 @@ class Attention(LightweightModule):
             xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
 
         ttnn.deallocate(x)
+        print("TT Inside xqkv_fused ", xqkv_fused_sharded)
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
             self.mesh_device,
@@ -423,6 +428,7 @@ class Attention(LightweightModule):
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
         )
+        print("TT Inside xqkv_fused ", xqkv_fused)
 
         if self.TG:
             # TODO: Slice the fused_query_key_value tensor get batch=8
@@ -440,9 +446,11 @@ class Attention(LightweightModule):
 
         # Reshape such that true unpadded batch is tracked in shape
         fqkv_shape = xqkv_fused.shape
+        print("TT Inside Before Rehsape xqkv_fused ", xqkv_fused)
         xqkv_fused = ttnn.reshape(
             xqkv_fused, (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3])
         )
+        print("TT Inside After Rehsape xqkv_fused ", xqkv_fused)
 
         ###
         # Reshape and rotary embeddings
@@ -458,20 +466,39 @@ class Attention(LightweightModule):
             memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"],
         )
 
+        print("TT q_heads_pre_rot_1BQD nlp_create_qkv_heads_decode ", q_heads_pre_rot_1BQD)
+
+        print("TT k_heads_pre_rot_1BKD nlp_create_qkv_heads_decode ", k_heads_pre_rot_1BKD)
+        print("TT v_heads_1BKD nlp_create_qkv_heads_decode ", v_heads_1BKD)
+
+        print("TT before q_norm  ", q_heads_pre_rot_1BQD)
+        print("TT before K Norm ", k_heads_pre_rot_1BKD)
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode")
         k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode")
+        print("TT after q_norm  ", q_heads_pre_rot_1BQD)
+        print("TT after K Norm ", k_heads_pre_rot_1BKD)
 
         ttnn.deallocate(xqkv_fused)
 
         # Q Rotary Embeddings
+
+        print("TT Input to rotary embedding llama q_heads_pre_rot_1BQD", q_heads_pre_rot_1BQD)
+        print("TT Input to rotary embedding llama cos ", rot_mats[0])
+        print("TT Input to rotary embedding llama sin ", rot_mats[1])
+
         q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
             q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
+
+        print("TT output of Rotary Embedding llama q_heads_1BQD", q_heads_1BQD)
+        print("TT Input to rotary embedding llama input", k_heads_pre_rot_1BKD)
 
         # K Rotary Embeddings
         k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
             k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
+
+        print("TT output of Rotary Embedding llama k_heads_1BKD", k_heads_1BKD)
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
@@ -500,6 +527,11 @@ class Attention(LightweightModule):
         # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
+
+        print("TT before sdpa decode q", q_heads_1BQD)
+        print("TT before sdpa decode keys", keys)
+
+        print("TT before sdpa decode values", values)
         if page_table:
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
@@ -524,23 +556,49 @@ class Attention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
 
+        print("TT Output of SDPA Decode ", attn_output_1G4D)
         ttnn.deallocate(q_heads_1BQD)
-
+        # attn_output_11BH = attn_output_1G4D
+        print("self.batch_size_per_device_group ", self.batch_size_per_device_group)
         attn_output_11BH = ttnn.to_memory_config(
             attn_output_1G4D,
             memory_config=self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](self.batch_size_per_device_group),
         )
+        print("TT Before NLP concat heads ", attn_output_11BH)
         attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_11BH,
             num_heads=self.n_local_heads,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        print("TT After NLP Concat heads ", attn_output_cat)
+
+        gather_attn_output_cat = ttnn.sharded_to_interleaved(attn_output_cat)
+        gather_attn_output_cat = ttnn.all_gather(gather_attn_output_cat, dim=3, num_links=1, topology=self.ccl_topology)
+        print("gather_all_reduce shape", gather_attn_output_cat.shape)
+
+        D = gather_attn_output_cat.shape[-1]
+        torch_gather_attn_output_cat = ttnn.to_torch(
+            gather_attn_output_cat, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+        )[:, :, :, :D]
+        print("torch_gather_attn_output_cat shape ", torch_gather_attn_output_cat.shape)
+        print("Gathered Output of torch_gather_attn_output_cat ", torch_gather_attn_output_cat)
+
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
 
         if self.use_fused_all_gather_matmul:
+            print("\n=== Using fused all_gather_matmul path ===")
+            print("--- Input to to_memory_config (attn_output_cat) ---")
+            print("attn_output_cat:", attn_output_cat)
             attn_output_cat = ttnn.to_memory_config(
                 attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
             )
+            print("--- Output of to_memory_config (attn_output_cat) ---")
+            print("attn_output_cat:", attn_output_cat)
+
+            print("\n--- Input to all_gather_matmul ---")
+            print("attn_output_cat:", attn_output_cat)
+            print("self.wo:", self.wo)
             _, dense_out_sharded, _ = ttnn.experimental.all_gather_matmul(
                 attn_output_cat,
                 self.wo,
@@ -552,11 +610,21 @@ class Attention(LightweightModule):
                 memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
                 memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
+            print("--- Output of all_gather_matmul ---")
+            print("dense_out_sharded:", dense_out_sharded)
+
+            print("\n--- Deallocating attn_output_cat ---")
             ttnn.deallocate(attn_output_cat)
+            print("\n--- Input to to_memory_config (dense_out_sharded) ---")
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+            print("--- Output of to_memory_config (dense_out_sharded) ---")
+            print("dense_out_sharded:", dense_out_sharded)
             return dense_out_sharded
 
         else:
+            print("\n=== Using unfused path ===")
+            print("--- Input to tt_all_gather ---")
+            print("attn_output_cat:", attn_output_cat)
             attn_output = tt_all_gather(
                 attn_output_cat,
                 self.mesh_device,
@@ -567,10 +635,17 @@ class Attention(LightweightModule):
                 sharded=True,
                 # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
             )
+            print("--- Output of tt_all_gather ---")
+            print("attn_output:", attn_output)
             if self.TG:
+                print("\n--- Input to to_memory_config (attn_output, TG path) ---")
                 attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
-                # user_selection_matrix = [1, 1, 32, 128]
-                # user_selection_matrix @ activation -> [1, 1, 32, 128] * [1, 1, 128, 2048] -> [1, 1, 32, 2048]
+                print("--- Output of to_memory_config (attn_output, TG path) ---")
+                print("attn_output:", attn_output)
+
+                print("\n--- Input to matmul (TG user_selection_matrix) ---")
+                print("user_selection_matrix:", self.user_selection_matrix)
+                print("attn_output:", attn_output)
                 attn_output = ttnn.matmul(
                     self.user_selection_matrix,
                     attn_output,
@@ -578,8 +653,12 @@ class Attention(LightweightModule):
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 )
+                print("--- Output of matmul (TG user_selection_matrix) ---")
+                print("attn_output:", attn_output)
 
-            # TODO: Fix this once self.TG supports dram-sharded matmuls
+            print("\n--- Input to matmul (dense_out_sharded) ---")
+            print("attn_output:", attn_output)
+            print("self.wo:", self.wo)
             dense_out_sharded = ttnn.matmul(
                 attn_output,
                 self.wo,
@@ -589,10 +668,14 @@ class Attention(LightweightModule):
                 dtype=ttnn.bfloat8_b if self.TG else ttnn.bfloat16,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
             )
+            print("--- Output of matmul (dense_out_sharded) ---")
+            print("dense_out_sharded:", dense_out_sharded)
 
+            print("\n--- Deallocating attn_output_cat ---")
             ttnn.deallocate(attn_output_cat)
 
-            # All reduce
+            print("\n--- Input to tt_all_reduce ---")
+            print("dense_out_sharded:", dense_out_sharded)
             dense_out_reduced = tt_all_reduce(
                 dense_out_sharded,
                 self.mesh_device,
@@ -614,11 +697,26 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
             )
+            print("--- Output of tt_all_reduce ---")
+            print("dense_out_reduced:", dense_out_reduced)
+            gather_all_reduce = ttnn.sharded_to_interleaved(dense_out_reduced)
+            gather_all_reduce = ttnn.all_gather(gather_all_reduce, dim=3, num_links=1, topology=self.ccl_topology)
+            print("gather_all_reduce shape", gather_all_reduce.shape)
+
+            D = gather_all_reduce.shape[-1]
+            torch_gather_all_reduce = ttnn.to_torch(
+                gather_all_reduce, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+            )[:, :, :, :D]
+            print("torch_gather_all_reduce shape ", torch_gather_all_reduce.shape)
+            print("Gathered Output of torch gather_all_reduce ", torch_gather_all_reduce)
 
             if not self.TG:
+                print("\n--- Input to to_memory_config (dense_out_reduced, non-TG) ---")
                 dense_out_reduced = ttnn.to_memory_config(
                     dense_out_reduced, self.model_config["DECODE_RESIDUAL_MEMCFG"]
                 )
+                print("--- Output of to_memory_config (dense_out_reduced, non-TG) ---")
+                print("dense_out_reduced:", dense_out_reduced)
 
             return dense_out_reduced
 
@@ -808,10 +906,13 @@ class Attention(LightweightModule):
         ###
         # Output matmul
         ###
+        print("TT Before NLP COncat heads attn_output_1QSD ", attn_output_1QSD)
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        print("TT After NLP Concat heads attn_output_11SH ", attn_output_11SH)
         ttnn.deallocate(attn_output_1QSD)
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
