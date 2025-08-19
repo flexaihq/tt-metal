@@ -302,7 +302,7 @@ def rotary_embedding_factory(
             dim=dim,
             max_position_embeddings=max_position_embeddings,
             base=base,
-            **rope_scaling.model_dump(exclude_none=True),
+            **rope_scaling.model_dump(exclude_none=True, exclude={"original_max_position_embeddings"}),
         )
 
 

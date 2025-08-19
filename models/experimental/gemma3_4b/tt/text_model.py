@@ -24,6 +24,7 @@ from models.experimental.gemma3_4b.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.common import copy_host_to_device
 from models.utility_functions import nearest_32
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 class Gemma3_4BTransformer(LightweightModule):
@@ -40,6 +41,7 @@ class Gemma3_4BTransformer(LightweightModule):
         super().__init__()
         self.args = args
         self.vocab_size = args.vocab_size
+        self.tt_ccl = TT_CCL(mesh_device)
         assert self.vocab_size > 0
         self.n_layers = args.n_layers
         self.mesh_device = mesh_device
@@ -105,6 +107,7 @@ class Gemma3_4BTransformer(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
             args.is_galaxy,

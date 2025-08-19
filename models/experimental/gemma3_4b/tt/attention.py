@@ -23,6 +23,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 class Attention(LightweightModule):
@@ -263,6 +264,7 @@ class Attention(LightweightModule):
 
         if f"{q_norm_str}.weight" in self.state_dict:
             fn_q_norm = RMSNorm(
+                tt_ccl=TT_CCL(mesh_device),
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
@@ -282,6 +284,7 @@ class Attention(LightweightModule):
 
         if f"{k_norm_str}.weight" in self.state_dict:
             fn_k_norm = RMSNorm(
+                tt_ccl=TT_CCL(mesh_device),
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
@@ -426,6 +429,7 @@ class Attention(LightweightModule):
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
             self.mesh_device,
+            tt_ccl=TT_CCL(self.mesh_device),
             cluster_axis=1,
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
@@ -572,6 +576,7 @@ class Attention(LightweightModule):
             attn_output = tt_all_gather(
                 attn_output_cat,
                 self.mesh_device,
+                tt_ccl=TT_CCL(self.mesh_device),
                 dim=2,
                 cluster_axis=1,
                 num_links=2,
@@ -608,6 +613,7 @@ class Attention(LightweightModule):
             dense_out_reduced = tt_all_reduce(
                 dense_out_sharded,
                 self.mesh_device,
+                tt_ccl=TT_CCL(self.mesh_device),
                 cluster_axis=0,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,
@@ -672,6 +678,7 @@ class Attention(LightweightModule):
         xqkv_fused = tt_all_reduce(
             xqkv_fused,
             self.mesh_device,
+            tt_ccl=TT_CCL(self.mesh_device),
             cluster_axis=1,
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
@@ -857,6 +864,7 @@ class Attention(LightweightModule):
             output_11SH = tt_all_reduce(
                 output_11SH,
                 self.mesh_device,
+                tt_ccl=TT_CCL(self.mesh_device),
                 cluster_axis=0,
                 dim=0 if self.TG else 3,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,

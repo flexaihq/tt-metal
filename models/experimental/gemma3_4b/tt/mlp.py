@@ -17,6 +17,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
@@ -174,6 +175,7 @@ class MLP(LightweightModule):
                 w1_out = tt_all_reduce(
                     w1_out,
                     self.mesh_device,
+                    tt_ccl=TT_CCL(self.mesh_device),
                     cluster_axis=1,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
@@ -183,6 +185,7 @@ class MLP(LightweightModule):
                 w3_out = tt_all_reduce(
                     w3_out,
                     self.mesh_device,
+                    t_ccl=TT_CCL(self.mesh_device),
                     cluster_axis=1,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
@@ -236,6 +239,7 @@ class MLP(LightweightModule):
         w2_out_reduced = tt_all_reduce(
             w2_out,
             self.mesh_device,
+            tt_ccl=TT_CCL(self.mesh_device),
             cluster_axis=0,
             dim=0 if (TG and self.dim < 8192) else 3,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,

@@ -11,7 +11,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
 
 
@@ -68,6 +68,7 @@ class TtGemma3MultiModalProjector(LightweightModule):
         weight_key = state_dict_prefix + ".mm_soft_emb_norm"
         self.mm_soft_emb_norm = RMSNorm(
             device=mesh_device,
+            tt_ccl=TT_CCL(mesh_device),
             dim=1152,
             state_dict=state_dict,
             state_dict_prefix="",
