@@ -237,6 +237,26 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
         return tokenizer.apply_chat_template([prompt_text], add_generation_prompt=True, tokenize=True)
 
 
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
+    """
+    Precompute the frequency tensor for sine and cosine values with given dimensions.
+
+    Args:
+        dim (int): Dimension of the frequency tensor.
+        end (int): End index for precomputing frequencies.
+        theta (float, optional): Scaling factor for frequency computation. Defaults to 500000.0.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Tensors containing cosine and sine values.
+    """
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end)
+    if scale_factor is not None:
+        freqs = apply_llama3_scaling(freqs, scale_factor, orig_context_len)
+    freqs = torch.outer(t, freqs).float()
+    return torch.cos(freqs), torch.sin(freqs)
+
+
 def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
     """
     Transform cos/sin frequencies to a rotation matrix.
