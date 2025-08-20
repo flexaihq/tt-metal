@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -9,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
@@ -36,6 +36,11 @@ from ttnn import ConcatMeshToTensor
     "batch_size",
     (1,),
 )
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    indirect=True,
+)
 def test_vision_attention(mesh_device, seq_len, batch_size):
     logger.info(f"seq_len: {seq_len}, batch_size: {batch_size}")
     dtype = ttnn.bfloat16
@@ -56,8 +61,10 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
     n_heads = model_args.vision_attn_n_heads
     head_dim = hidden_size // n_heads
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaImageAttention(
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -72,11 +79,6 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
     B, T, D = pt_attention_input.shape
     cos = torch.ones((1, T, head_dim)).to(torch.bfloat16)
     sin = torch.zeros((1, T, head_dim)).to(torch.bfloat16)
-
-    # attention_input = model_args.prepare_residual_tensor_prefill(
-    #     pt_attention_input,
-    #     force_replicated=True,
-    # )
 
     attention_input = ttnn.from_torch(
         pt_attention_input.unsqueeze(0),

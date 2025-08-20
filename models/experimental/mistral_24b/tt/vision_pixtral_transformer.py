@@ -1,6 +1,11 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
+"""
+This file implements the Vision Transformer submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
+This pipeline iterates over the pixtral image blocks to generate the image embeddings.
+"""
 
 from tqdm import tqdm
 
@@ -12,6 +17,7 @@ class TtPixtralTransformer(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -23,11 +29,13 @@ class TtPixtralTransformer(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
 
         block_key = "layers"
         self.resblocks = [
             TtPixtralImageTransformerBlock(
                 mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 state_dict=state_dict,
                 state_dict_prefix=f"{state_dict_prefix}{block_key}.{i}.",
                 weight_cache_path=weight_cache_path,

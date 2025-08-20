@@ -1,5 +1,9 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
+
+"""
+This file is a unit test for validating the Mistral-24B Vision Model pipeline.
+"""
 
 import os
 import pytest
@@ -7,6 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
@@ -29,6 +34,11 @@ def get_image_features(vision_tower, projector, input_tensor, image_sizes):
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
     indirect=True,
 )
 def test_mistral_vision_model(mesh_device, reset_seeds):
@@ -62,15 +72,17 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
     reference_output = get_image_features(reference_model, reference_mmp, input_tensor, image_sizes=[(H, W)])
 
     # ##### TT Model: TtMistralVisionTransformer #####
+    tt_ccl = TT_CCL(mesh_device=mesh_device)
     vision_model = TtMistralVisionTransformer(
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,
         dtype=dtype,
         model_args=model_args,
     )
 
-    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])  # [0]
+    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, : tt_output.shape[-1]
     ]

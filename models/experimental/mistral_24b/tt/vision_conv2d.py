@@ -1,16 +1,20 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+"""
+This is the modified version of the vision_patch_conv2d for the Mistral-Small-3.1-24B-Instruct-2503 model.
+We have modified the llama_patch_conv2d to be compatible with the Mistral-Small-3.1-24B-Instruct-2503 model.
+"""
 
+import torch
 import ttnn
+
 from models.common.lightweightmodule import LightweightModule
 
 
 class TtMistralConv2dPatch(LightweightModule):
     """Conv2D Patching layer.
-    Column parallel over unfolded input.
     Arguments:
         in_channels: Input channels.
         out_channels: Output channels.
@@ -58,13 +62,9 @@ class TtMistralConv2dPatch(LightweightModule):
 
         self._unfold = torch.nn.Unfold(kernel_size=self.kernel_size, stride=self.stride)
 
-        weight = state_dict[f"{state_dict_prefix}weight"]
+        weight = state_dict[f"{state_dict_prefix}_linear.weight"]
         if weight.ndim == 4:
             weight = weight.reshape(out_channels, -1).T
-        # pad_len = nearest_32(weight.shape[-1]) - weight.shape[-1]
-        # padding = torch.zeros(self.out_channels, pad_len, dtype=weight.dtype)
-        # padded_weight = torch.cat([weight, padding], dim=-1)
-        # padded_weight = padded_weight.permute(1, 0).reshape(1, 1, -1, self.out_channels)
 
         self._linear_weight = ttnn.as_tensor(
             weight,
@@ -86,11 +86,6 @@ class TtMistralConv2dPatch(LightweightModule):
     def forward(self, x: torch.Tensor):
         x = self._unfold(x)
         x = x.permute(0, 2, 1)
-
-        # Need to pad the last dimension of x to be a multiple of a tile
-        # pad_len = nearest_32(x.shape[-1]) - x.shape[-1]
-        # padding = torch.zeros((x.shape[0], x.shape[1], pad_len), dtype=x.dtype, device=x.device)
-        # x = torch.cat([x, padding], dim=-1)
 
         x = ttnn.as_tensor(
             x,

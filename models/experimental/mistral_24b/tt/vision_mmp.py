@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+This file implements the Vision MultiModalProjector submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
+"""
 
 import torch
 from models.common.lightweightmodule import LightweightModule
@@ -22,14 +25,9 @@ class TTMistral3PatchMerger(LightweightModule):
         super().__init__()
         self.device = mesh_device
         hidden_size = args.vision_dim
-        self.spatial_merge_size = 2  # TODO Handle in Model_config spatial_merge_size
+        self.spatial_merge_size = 2
         self.patch_size = args.vision_patch_size
         self.args = args
-        # self.patch_size = ttnn.from_torch(
-        #     torch.tensor(args.vision_patch_size, dtype=torch.int32),
-        #     device=mesh_device,
-        #     dtype=ttnn.int32
-        # )
 
         def get_weight(name):
             return torch.transpose(state_dict[f"{state_dict_prefix}{name}.weight"], -2, -1)
@@ -51,7 +49,6 @@ class TTMistral3PatchMerger(LightweightModule):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                # cache_file_name=cache_name(name),
             )
 
         self.merging_weights = as_tensor("merging_layer", dtype)
@@ -147,7 +144,6 @@ class TTMistral3MultiModalProjector(LightweightModule):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                # cache_file_name=cache_name(name),
             )
 
         self.linear_1_weight = as_tensor("linear_1", dtype)

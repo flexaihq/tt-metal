@@ -1,12 +1,16 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+"""
+This is the modified version of the vision_attention for the Mistral-Small-3.1-24B-Instruct-2503 model.
+We introduced the `apply_rotary_pos_emb_vision_tt` function to llama_image_attention to be compatible with the Mistral-Small-3.1-24B-Instruct-2503 model.
+"""
 
 import torch
-
 import ttnn
+
 from models.common.lightweightmodule import LightweightModule
-from models.utility_functions import nearest_32
+from models.utility_functions import is_blackhole, nearest_32
 
 
 def rotate_half(x):
@@ -33,6 +37,7 @@ class TtMistralImageAttention(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -43,6 +48,7 @@ class TtMistralImageAttention(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
 
         self.hidden_size = configuration.vision_dim
@@ -137,7 +143,6 @@ class TtMistralImageAttention(LightweightModule):
             dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            # cache_file_name=cache_name("wqkv_sharded"),
         )
 
         self.wo = ttnn.as_tensor(
@@ -151,7 +156,6 @@ class TtMistralImageAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
-            # cache_file_name=cache_name("wo_sharded"),
         )
 
         self.scale = self.head_dim**-0.5
@@ -159,7 +163,7 @@ class TtMistralImageAttention(LightweightModule):
     def forward(self, x_11SH, position_embeddings=None):
         seq_len = x_11SH.shape[-2]
 
-        MAX_MM_SEQ_LEN = self.configuration.VISION_MAX_MM_SEQ
+        MAX_MM_SEQ_LEN = seq_len
 
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
@@ -237,7 +241,23 @@ class TtMistralImageAttention(LightweightModule):
 
         # All reduce
         if self.num_devices > 1:  # replace with reduce_scatter and all_gather
-            dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+            # TODO: 26411
+            # Remove this blackhole condition once fabric CCLs are working on blackhole
+            if is_blackhole():
+                dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
+            else:
+                dense_out_gathered = ttnn.experimental.all_gather_async(
+                    output_11SH,
+                    persistent_output_buffer=None,
+                    dim=1,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=1,
+                    topology=ttnn.Topology.Linear,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
             output_11SH.deallocate(True)
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
