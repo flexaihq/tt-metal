@@ -7,7 +7,6 @@ This involves vision followed by MultiModalProjector processing
 
 # SPDX-License-Identifier: Apache-2.0
 
-
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.gemma3_4b.tt.gemma_vision_model import TtSiglipGemmaVisionModel
 from models.experimental.gemma3_4b.tt.mmp import TtGemma3MultiModalProjector
@@ -42,7 +41,7 @@ class TtGemmaTransformerVision(LightweightModule):
             mesh_device,
             self.tt_ccl,
             state_dict,
-            f"model.{state_dict_prefix}",
+            state_dict_prefix,
             dtype=dtype,
             configuration=configuration,
             weight_cache_path=configuration.weight_cache_path(dtype),

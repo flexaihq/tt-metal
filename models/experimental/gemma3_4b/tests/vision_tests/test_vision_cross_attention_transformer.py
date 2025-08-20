@@ -41,7 +41,7 @@ def test_gemma_vision(
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
 
-    vision_first_layer_prefix = "vision_tower.vision_model."
+    vision_first_layer_prefix = "visual."
     vision_partial_state_dict = {
         k[len(vision_first_layer_prefix) :]: v
         for k, v in state_dict.items()
@@ -96,7 +96,7 @@ def test_gemma_vision(
         mesh_device,
         tt_ccl,
         state_dict,
-        state_dict_prefix="vision_tower.vision_model.",
+        state_dict_prefix="visual.",
         dtype=dtype,
         configuration=model_args,
         return_intermediate=False,

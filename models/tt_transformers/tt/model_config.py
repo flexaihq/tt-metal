@@ -27,7 +27,6 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_meta_to_hf,
-    convert_vision_hf_to_meta,
     convert_vision_meta_to_hf,
     load_hf_state_dict,
     load_meta_state_dict,
@@ -1833,13 +1832,10 @@ class ModelArgs:
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
             if self.is_multimodal:
-                if "gemma-3-4b" in self.model_name:
-                    state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
-                else:
-                    state_dict = standardize_hf_keys_multimodal(state_dict)
+                state_dict = standardize_hf_keys_multimodal(state_dict)
             else:
                 state_dict = standardize_hf_keys(state_dict)
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]

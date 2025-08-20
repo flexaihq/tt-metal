@@ -46,9 +46,9 @@ def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     if gated:
-        first_layer_prefix = "model.vision_tower.vision_model.encoder.layers.0."
+        first_layer_prefix = "visual.encoder.layers.0."
     else:
-        first_layer_prefix = "model.vision_tower.vision_model.encoder.layers.0."
+        first_layer_prefix = "visual.encoder.layers.0."
     # partial_state_dict = {
     #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     # }
