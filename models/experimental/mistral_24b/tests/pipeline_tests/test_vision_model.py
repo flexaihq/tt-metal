@@ -11,7 +11,6 @@ import torch
 from loguru import logger
 
 import ttnn
-
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
@@ -34,6 +33,11 @@ def get_image_features(vision_tower, projector, input_tensor, image_sizes):
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
     indirect=True,
 )
 def test_mistral_vision_model(mesh_device, reset_seeds):

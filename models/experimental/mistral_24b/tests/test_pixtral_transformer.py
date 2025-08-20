@@ -34,7 +34,6 @@ from models.common.utility_functions import comp_allclose, comp_pcc
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
     indirect=True,
 )
-
 def test_image_transformer_inference(batch, num_chunks, mesh_device):
     pcc_required = 0.99
 
