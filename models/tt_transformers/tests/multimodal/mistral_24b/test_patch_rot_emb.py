@@ -10,7 +10,6 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 
-# models/tt_transformers/tt/common.py
 from models.tt_transformers.tt.multimodal.mistral_24b.vision_rope import VisionRotarySetup as RotarySetup
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 

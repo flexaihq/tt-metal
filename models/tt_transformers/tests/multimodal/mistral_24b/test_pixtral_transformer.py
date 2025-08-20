@@ -28,11 +28,6 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
-    indirect=True,
-)
 def test_image_transformer_inference(batch, num_chunks, mesh_device):
     pcc_required = 0.99
 
@@ -57,10 +52,8 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
 
     all_tests_pass = True
 
-    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtPixtralTransformer(
         mesh_device,
-        tt_ccl,
         state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=None,
