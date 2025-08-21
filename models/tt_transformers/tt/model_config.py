@@ -27,10 +27,10 @@ from models.tt_transformers.tt.common import (
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_meta_to_hf,
-    convert_vision_meta_to_hf,
     load_hf_state_dict,
     load_meta_state_dict,
     reverse_permute,
+    standardize_hf_keys,
     standardize_hf_keys_multimodal,
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
@@ -1543,8 +1543,8 @@ class ModelArgs:
         # self.vision_patch_size = 14
         # self.vision_in_channels = 3
 
-        self.state_dict_text_prefix = self._get_text_prefix()
         self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.state_dict_text_prefix = self._get_text_prefix()
 
         logger.info(f"CONFIG: {config}")
         if self.is_multimodal:
@@ -1801,7 +1801,8 @@ class ModelArgs:
             if self.is_multimodal:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
             else:
-                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+                state_dict = standardize_hf_keys(state_dict)
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2367,7 +2368,7 @@ class ModelArgs:
         model = self.reference_vision_transformer(wrap=False)
         layer = model
         layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_model(self):
