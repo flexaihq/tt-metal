@@ -74,7 +74,7 @@ class TtSiglipGemmaVisionModel(LightweightModule):
             device=mesh_device,
             dim=self.width,
             state_dict=state_dict,
-            state_dict_prefix=f"{state_dict_prefix}ln_post.",
+            state_dict_prefix=f"{state_dict_prefix}post_layernorm.",
             weight_cache_path=configuration.weight_cache_path(dtype),
             weight_dtype=dtype,
             eps=configuration.norm_eps,

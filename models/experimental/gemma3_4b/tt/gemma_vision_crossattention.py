@@ -51,7 +51,7 @@ class TtGemmaTransformerVision(LightweightModule):
         self.mmp = TtGemma3MultiModalProjector(
             mesh_device=mesh_device,
             state_dict=state_dict,
-            state_dict_prefix="model.multi_modal_projector",
+            state_dict_prefix="multi_modal_projector",
             image_size=configuration.vision_chunk_size,
             patch_size=configuration.vision_patch_size,
             hidden_size=configuration.vision_hidden_dim,

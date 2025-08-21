@@ -1727,15 +1727,6 @@ class ModelArgs:
             "": "",  # If no module is given, just get layer prefix
         }
 
-        vision_module_map = {
-            "MLP": "mlp.",
-            "Attention": "self_attn.",
-            "TransformerBlock": "",
-            "": "",
-        }
-
-        module_map = vision_module_map if is_vision else module_map
-
         return text_prefix + layer_prefix + module_map[module_name]
 
     def weight_cache_path(self, dtype):

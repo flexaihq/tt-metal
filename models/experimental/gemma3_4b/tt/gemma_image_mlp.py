@@ -60,11 +60,11 @@ class TtGemmaImageFeedForward(LightweightModule):
         )
 
         # Sharded weights
-        self.c_fc_weight = as_interleaved_tensor("c_fc", "weight", dtype, dim=-1)
-        self.c_fc_bias = as_interleaved_tensor("c_fc", "bias", ttnn.bfloat16, dim=-1)
+        self.c_fc_weight = as_interleaved_tensor("fc1", "weight", dtype, dim=-1)
+        self.c_fc_bias = as_interleaved_tensor("fc1", "bias", ttnn.bfloat16, dim=-1)
         self.c_fc_bias = ttnn.reshape(self.c_fc_bias, [1, -1])
-        self.c_proj_weight = as_interleaved_tensor("c_proj", "weight", dtype, dim=-2)
-        self.c_proj_bias = as_interleaved_tensor("c_proj", "bias", ttnn.bfloat16, dim=None)
+        self.c_proj_weight = as_interleaved_tensor("fc2", "weight", dtype, dim=-2)
+        self.c_proj_bias = as_interleaved_tensor("fc2", "bias", ttnn.bfloat16, dim=None)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """

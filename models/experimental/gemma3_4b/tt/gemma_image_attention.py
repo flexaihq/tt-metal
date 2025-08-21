@@ -63,7 +63,7 @@ class TtGemmaImageAttention(LightweightModule):
         wq_str = f"{state_dict_prefix}wq.weight"
         wk_str = f"{state_dict_prefix}wk.weight"
         wv_str = f"{state_dict_prefix}wv.weight"
-        wo_str = f"{state_dict_prefix}wo.weight"
+        wo_str = f"{state_dict_prefix}out_proj.weight"
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % configuration.num_devices == 0
