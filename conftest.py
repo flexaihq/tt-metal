@@ -889,7 +889,7 @@ def pytest_runtest_teardown(item, nextitem):
     metal_timeout_enabled = item.config.getoption("--metal-timeout")
     using_xdist = int(os.getenv("PYTEST_XDIST_WORKER_COUNT", "0"))
 
-    if metal_timeout_enabled is not None or using_xdist:
+    if metal_timeout_enabled is not None or using_xdist > 0:
         report = item.stash[phase_report_key]
         test_failed = report.get("call", None) and report["call"].failed
         if test_failed:
