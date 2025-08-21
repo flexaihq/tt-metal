@@ -7,7 +7,6 @@ This implementation combines patch_conv followed by Embeddings as a submodule.
 
 # SPDX-License-Identifier: Apache-2.0
 
-
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -54,7 +53,7 @@ class TtSiglipVisionEmbeddings(LightweightModule):
         )
 
         # Positional embedding
-        positional_embedding = state_dict[f"{state_dict_prefix}position_embedding.positional_embedding"]
+        positional_embedding = state_dict[f"{state_dict_prefix}position_embedding.weight"]
 
         self.pos_emb_weights = ttnn.as_tensor(
             positional_embedding,
