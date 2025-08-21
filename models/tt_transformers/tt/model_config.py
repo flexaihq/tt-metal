@@ -1397,6 +1397,9 @@ class ModelArgs:
         else:
             return ""
 
+    def _get_vision_prefix(self):
+        return "visual."
+
     def _get_hidden_activation_type(self, config):
         activation_map = {
             "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
@@ -1524,33 +1527,13 @@ class ModelArgs:
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
-        # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", -1)
-        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
-
-        # Vision constants
-        # self.vision_dim = 1280
-        # self.vision_mlp_ratio = 4
-        # self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
-        # self.vision_act_layer = ttnn.UnaryOpType.GELU
-        # self.vision_dropout = 0.0
-        # self.vision_attn_n_heads = 16
-        # self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
-        # self.vision_n_layers = 32
-        # self.vision_n_global_layers = 8
-        # self.vision_max_num_tiles = 4
-        # self.vision_patch_size = 14
-        # self.vision_in_channels = 3
-
+        self._set_vision_params(config)
         self.is_multimodal = "vision_config" in config or self.is_vision()
         self.state_dict_text_prefix = self._get_text_prefix()
-
-        logger.info(f"CONFIG: {config}")
-        if self.is_multimodal:
-            self._set_vision_params(config["vision_config"])
+        self.state_dict_vision_prefix = self._get_vision_prefix()
 
         self._set_model_specific_params()
+        logger.info(f"CONFIG: {config}")
 
     @property
     def use_scaled_rope(self):
@@ -1621,25 +1604,14 @@ class ModelArgs:
             else None
         )
 
-    # def _set_vision_params(self, vision_config):
-    #     self.vision_dim = vision_config.get("hidden_size", 1280)
-    #     self.vision_mlp_ratio = vision_config.get("intermediate_size", self.vision_dim * 4) // self.vision_dim
-    #     self.vision_hidden_dim = vision_config.get("intermediate_size", self.vision_dim * self.vision_mlp_ratio)
-    #     self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
-    #     self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
-    #     self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
-    #     self.vision_patch_size = vision_config.get("patch_size", 14)
-    #     self.vision_in_channels = vision_config.get("num_channels", 3)
-    #     self.vision_act_layer = ttnn.UnaryOpType.GELU  # or read from config if variable
-    #     self.vision_dropout = vision_config.get("attention_dropout", 0.0)
-    #     self.vision_max_num_tiles = 4
-    #     self.vision_n_global_layers = 8
+    def _set_vision_params(self, config):
+        vision_config = config.get("vision_config", config)
 
-    def _set_vision_params(self, vision_config):
-        self.vision_chunk_size = vision_config.get("vision_chunk_size", 896)
+        self.vision_chunk_size = vision_config.get("vision_chunk_size", -1)
+        self.image_size = vision_config.get("image_size", 896)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 8)
-        self.vision_dim = vision_config.get("hidden_size", 1152)
+        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", -1)
+        self.vision_dim = vision_config.get("hidden_size", 1280)
 
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
@@ -1647,7 +1619,7 @@ class ModelArgs:
         self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
         self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
 
-        self.vision_n_layers = vision_config.get("num_hidden_layers", 27)
+        self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
         self.vision_patch_size = vision_config.get("patch_size", 14)
         self.vision_in_channels = vision_config.get("num_channels", 3)
 
@@ -1663,12 +1635,8 @@ class ModelArgs:
         }.get(act_layer, ttnn.UnaryOpType.GELU)
 
         # Optional tuning knobs
-        # self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
+        self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
         self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
-
-        # # Optional Meta-specific knobs
-        # self.vision_max_num_chunks = vision_config.get("max_num_chunks", 4)
-        # self.vision_num_cross_attention_layers = vision_config.get("num_cross_attention_layers", -1)
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
@@ -1718,6 +1686,7 @@ class ModelArgs:
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
         text_prefix = self.state_dict_text_prefix
+        vision_prefix = self.state_dict_vision_prefix
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
 
         module_map = {
@@ -1727,7 +1696,8 @@ class ModelArgs:
             "": "",  # If no module is given, just get layer prefix
         }
 
-        return text_prefix + layer_prefix + module_map[module_name]
+        prefix = vision_prefix if is_vision else text_prefix
+        return prefix + layer_prefix + module_map[module_name]
 
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
@@ -1785,6 +1755,7 @@ class ModelArgs:
                 if self.cache_hf_flag:
                     self.cached_hf_model = model
                 state_dict = model.state_dict()
+                logger.info(f"VANILLA KEYS ARE {state_dict.keys()}")
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 
@@ -1801,6 +1772,7 @@ class ModelArgs:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
 
+        logger.info(f"CONVERTED KEYS ARE {state_dict.keys()}")
         return state_dict
 
     def create_dram_sharded_mem_config(self, k, n):
@@ -2482,7 +2454,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in (
+            use_position_embeddings = self.from_hf_url or layer.__class__.__name__ in (
                 "Qwen3Attention",
                 "MistralAttention",
                 "Gemma3Attention",

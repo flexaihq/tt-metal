@@ -59,10 +59,14 @@ def standardize_hf_keys_multimodal(state_dict):
     for k in all_keys:
         if "model.visual." in k:
             new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
+        elif "model.vision_tower.vision_model.encoder" in k:
+            new_state_dict[k.replace("model.vision_tower.vision_model.encoder.", "visual.")] = state_dict[k]
         elif "model.vision_tower.vision_model." in k:
             new_state_dict[k.replace("model.vision_tower.vision_model.", "visual.")] = state_dict[k]
         elif "model.language_model." in k:
             new_state_dict[k.replace("model.language_model.", "model.")] = state_dict[k]
+        elif "model.multimodal_projector." in k:
+            new_state_dict[k.replace("model.multimodal_projector.", "multimodal_projector.")] = state_dict[k]
         else:
             new_state_dict[k] = state_dict[k]
 
@@ -425,16 +429,17 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
     """Convert HuggingFace QKV weights to Meta format for RoPE compatibility."""
     converted_weights = {}
     for key, tensor in loaded_weights.items():
-        if "q_proj.weight" in key or "k_proj.weight" in key:
-            # For weights: n_heads = tensor.shape[0] // head_dim
-            n_heads = tensor.shape[0] // head_dim
-            converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
-        elif "q_proj.bias" in key or "k_proj.bias" in key:
-            # For biases: n_heads = tensor.shape[0] // head_dim
-            n_heads = tensor.shape[0] // head_dim
-            converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
-        elif "q_norm.weight" in key or "k_norm.weight" in key:
-            converted_weights[key] = reverse_permute_1d(tensor)
+        if "language_model" in key:
+            if "q_proj.weight" in key or "k_proj.weight" in key:
+                # For weights: n_heads = tensor.shape[0] // head_dim
+                n_heads = tensor.shape[0] // head_dim
+                converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
+            elif "q_proj.bias" in key or "k_proj.bias" in key:
+                # For biases: n_heads = tensor.shape[0] // head_dim
+                n_heads = tensor.shape[0] // head_dim
+                converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
+            elif "q_norm.weight" in key or "k_norm.weight" in key:
+                converted_weights[key] = reverse_permute_1d(tensor)
         else:
             # Keep all other weights unchanged
             converted_weights[key] = tensor
@@ -486,8 +491,6 @@ def map_hf_to_meta_keys(loaded_weights):
         ("k_proj", "wk"),
         ("v_proj", "wv"),
         ("o_proj", "wo"),
-        ("q_norm", "q_norm"),
-        ("k_norm", "k_norm"),
     ]
     return replace_keys(loaded_weights, replacements)
 

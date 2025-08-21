@@ -33,7 +33,7 @@ class TtGemmaTransformerVision(LightweightModule):
 
         self.dim = configuration.dim
         self.vision_dim = configuration.vision_dim
-        self.image_res = configuration.vision_chunk_size
+        self.image_res = configuration.image_size
         self.patch_size = configuration.vision_patch_size
         self.configuration = configuration
 
@@ -52,7 +52,7 @@ class TtGemmaTransformerVision(LightweightModule):
             mesh_device=mesh_device,
             state_dict=state_dict,
             state_dict_prefix="multi_modal_projector",
-            image_size=configuration.vision_chunk_size,
+            image_size=configuration.image_size,
             patch_size=configuration.vision_patch_size,
             hidden_size=configuration.vision_hidden_dim,
             mm_tokens_per_image=configuration.mm_tokens_per_image,

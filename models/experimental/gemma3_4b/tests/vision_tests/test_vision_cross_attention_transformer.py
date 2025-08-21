@@ -56,7 +56,7 @@ def test_gemma_vision(
     #     k[len(mmp_first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(mmp_first_layer_prefix))
     # }
 
-    image_size = model_args.vision_chunk_size
+    image_size = model_args.image_size
     in_channels = model_args.vision_in_channels
 
     # model_id = "google/gemma-3-4b-it"

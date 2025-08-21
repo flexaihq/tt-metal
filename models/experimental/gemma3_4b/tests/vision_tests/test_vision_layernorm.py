@@ -41,9 +41,9 @@ def test_layernorm_inference(mesh_device, reset_seeds, layer_name):
 
     # Prefix for vision MLP weights — consistent with HF checkpoint
     if layer_name == "layer_norm1":
-        first_layer_prefix = "visual.encoder.layers.0.ln_1."
+        first_layer_prefix = "visual.layers.0.layer_norm1."
     else:
-        first_layer_prefix = "visual.encoder.layers.0.ln_2."
+        first_layer_prefix = "visual.layers.0.layer_norm2."
 
     model_args.WEIGHTS_DTYPE = dtype
     # Reference HF MLP (from Gemma3 vision tower)
