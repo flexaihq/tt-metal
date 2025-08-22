@@ -235,7 +235,7 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
         self.max_gen_len = self.model_args[0].max_seq_len - 1
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, tt_data_parallel=1):
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len=32768, tt_data_parallel=1):
         max_seq_len = 1024 * 128
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
