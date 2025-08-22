@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-
 """
 This is the modified version of the FeedForward for the Mistral-Small-3.1-24B-Instruct-2503 model.
 This file implements the Vision FeedForward submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
