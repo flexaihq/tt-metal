@@ -121,9 +121,7 @@ def tt_all_gather(
     dtype=ttnn.bfloat16,
 ):
     # N150
-    print("TT All gather invoked")
     if list(mesh_device.shape) == (1, 1) or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
-        print("All gather returning input_tensor as it is ")
         return input_tensor
 
     # Ensure the input tensor is in the correct memory configuration
