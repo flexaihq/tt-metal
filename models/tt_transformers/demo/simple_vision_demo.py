@@ -471,6 +471,7 @@ def test_multimodal_demo_text(
     logger.info("")
 
     logger.info(f"is_ci_env: {is_ci_env}")
+    is_ci_env = True
     if is_ci_env and max_batch_size == 1 and enable_trace:  # Only profiling these parametrizations
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
@@ -478,12 +479,14 @@ def test_multimodal_demo_text(
             "N300_Llama-3.2-11B": 23,
             "T3K_Llama-3.2-11B": 20,
             "T3K_Llama-3.2-90B": 3,
+            "T3K_Mistral-Small-3.1-24B": 1254.50,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s_u = {
             "N300_Llama-3.2-11B": 21.5,
             "T3K_Llama-3.2-11B": 34.25,
             "T3K_Llama-3.2-90B": 6,
+            "T3K_Mistral-Small-3.1-24B": 28.50,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s = target_decode_tok_s_u * max_batch_size
