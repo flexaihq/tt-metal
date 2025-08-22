@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import re
 from enum import Enum
 from types import SimpleNamespace
@@ -367,6 +368,42 @@ def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, ori
     rot_mats = [cos_gathereds, sin_gathereds]
     return rot_mats
 
+def compute_linear_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Linear scaling for rotary embeddings."""
+    freqs /= scale_factor
+    return freqs
+
+
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int, rope_type="llama3"):
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
+
+    if rope_type == "linear":
+        freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "llama3":
+        freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
+
+    return freqs
+
+
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
+    """
+    Precompute the frequency tensor for sine and cosine values with given dimensions.
+
+    Args:
+        dim (int): Dimension of the frequency tensor.
+        end (int): End index for precomputing frequencies.
+        theta (float, optional): Scaling factor for frequency computation. Defaults to 500000.0.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Tensors containing cosine and sine values.
+    """
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end)
+    if scale_factor is not None:
+        freqs = apply_llama3_scaling(freqs, scale_factor, orig_context_len)
+    freqs = torch.outer(t, freqs).float()
+    return torch.cos(freqs), torch.sin(freqs)
+
 
 #  Add-Multiply method of rotary embeddings for prefill
 def get_rot_transformation_mat(dhead):
@@ -673,7 +710,11 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    from models.tt_transformers.tt.model import Transformer
+    if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
+        from models.experimental.gemma3.tt.text_model import Gemma3Transformer as Transformer
+    else:
+        from models.tt_transformers.tt.model import Transformer
+
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(
