@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+This file is a unit test for validating the Mistral-24B Vision Model pipeline.
+"""
+
 import os
 
 import pytest
