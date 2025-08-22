@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+"""
+This file implements the pixtral image block specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
+"""
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -9,9 +12,6 @@ from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention as TtLlamaImageAttention
 from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
 
-"""
-This file implements the pixtral image block specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
-"""
 
 class TtPixtralImageTransformerBlock(LightweightModule):
     def __init__(

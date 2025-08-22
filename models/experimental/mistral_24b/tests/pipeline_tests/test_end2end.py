@@ -355,8 +355,8 @@ def run_generation_exactly_like_test_end2end(
 
     # Final response (exactly like test_end2end.py)
     response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
-    logger.info(f"📝 Final Generated Response:\n{response}")
-    logger.info(f"📝 Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
+    logger.info(f"Final Generated Response:\n{response}")
+    logger.info(f"Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
     chat = parse_chat_output(response)
     display_chat(logger, chat)
 
@@ -518,7 +518,7 @@ def test_e2e_vision_text_pipeline(
 
     # Final validation
     if validation_passed and len(results) > 0:
-        logger.info("✅ E2E vision-text pipeline test PASSED!")
+        logger.info("E2E vision-text pipeline test PASSED!")
         logger.info(f"Successfully generated {len(results)} tokens")
 
         # Log generated tokens for debugging
