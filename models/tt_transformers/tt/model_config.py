@@ -1625,9 +1625,8 @@ class ModelArgs:
         )
 
     def _set_vision_params(self, vision_config):
-        vision_config = config.get("vision_config", config)
-
         self.vision_chunk_size = vision_config.get("vision_chunk_size", 896)
+        self.image_size = vision_config.get("image_size", 896)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
         self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 8)
         self.vision_dim = vision_config.get("hidden_size", 1152)
@@ -1662,12 +1661,6 @@ class ModelArgs:
         # Optional tuning knobs
         self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
         self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
-        # self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
-        # self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
-
-        # # Optional Meta-specific knobs
-        # self.vision_max_num_chunks = vision_config.get("max_num_chunks", 4)
-        # self.vision_num_cross_attention_layers = vision_config.get("num_cross_attention_layers", -1)
 
     def _set_hf_params(self, checkpoint_dir):
         def merge_text_config(base_config):
@@ -1741,7 +1734,7 @@ class ModelArgs:
         return self.vision_chunk_size > 0
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        if self.is_vision() and "Mistral-Small-3.1-24B" not in self.model_name:
+        if self.is_vision() and self.model_name.startswith("Mistral") and "Small-3.1-24B" not in self.model_name:
             text_prefix = self.state_dict_text_prefix
         else:
             text_prefix = "" if not is_vision else self.state_dict_text_prefix
@@ -2384,20 +2377,6 @@ class ModelArgs:
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
-    def reference_vision_rms_norm_qwen(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.visual.blocks[0].norm1
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_rms_norm_qwen_merger(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.visual.merger
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
-        return layer
-
     def reference_rms_norm(self):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm
@@ -2463,30 +2442,19 @@ class ModelArgs:
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
-    def reference_vision_model(self):
+    def reference_vision_mlp(self, layer_idx=0):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_mlp(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0].mlp
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            layer = model.vision_tower.transformer.layers[layer_idx].feed_forward
+        else:
+            layer = model.vision_tower.vision_model.encoder.layers[0].mlp
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_pixtral_image_block(self, layer_num=0):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.transformer.layers[layer_num]
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_mlp(self, layer_idx=0):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.transformer.layers[layer_idx].feed_forward
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
@@ -2510,8 +2478,6 @@ class ModelArgs:
         layer = model.vision_tower.vision_model.embeddings.patch_embedding
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_pos_embedding(self):
@@ -2519,8 +2485,6 @@ class ModelArgs:
         layer = model.vision_tower.vision_model.embeddings.position_embedding
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_embedding(self):
@@ -2540,22 +2504,6 @@ class ModelArgs:
             layer = model.vision_tower.vision_model.post_layernorm
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_attention(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
-    def reference_vision_layernorm(self):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm1
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_attention(self, layer_idx=0):
@@ -2581,15 +2529,10 @@ class ModelArgs:
         layer = model.vision_tower.vision_model.encoder.layers[0]
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_encoder(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder
-        # layer._load_state_dict = layer.load_state_dict
-        # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
             layer = model.vision_tower.transformer
         else:
@@ -2656,7 +2599,7 @@ class ModelArgs:
                 "Gemma3Attention",
             )
             wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb wif use_position_embeddings else None
+                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
             return wrapper
 
