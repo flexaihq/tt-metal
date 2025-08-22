@@ -555,7 +555,8 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "gemma-3-4b": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": 128},
+                "gemma-3-27b": {"N150": None, "N300": None, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -592,7 +593,7 @@ class ModelArgs:
         if (
             self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-4b"]
             and self.device_name == "N150"
-        ) or (self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"):
+        ) or (self.base_model_name in ["Qwen2.5-7B", "gemma-3-4b"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
 
@@ -1436,17 +1437,12 @@ class ModelArgs:
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
         self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
-        layer_types = text_config["layer_types"] if "layer_types" in text_config else None
-
         # Common params with different names between Meta and HF
         self.dim = text_config.get("dim", text_config.get("hidden_size"))
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
 
-        self.sliding_window_pattern = (
-            [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
-        )
 
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
@@ -1646,7 +1642,7 @@ class ModelArgs:
                 from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
             else:
                 from transformers import AutoConfig
-
+ 
             if self.dummy_weights:
                 logger.info(
                     f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
@@ -2243,9 +2239,6 @@ class ModelArgs:
             # Special case Qwen2.5-VL models until they are fully integrated into a HF release
             if "Qwen/Qwen2.5-VL" in self.model_name:
                 from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                )
             else:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
@@ -2257,20 +2250,14 @@ class ModelArgs:
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
-                if "gemma-3" in self.model_name:
-                    from transformers import Gemma3ForConditionalGeneration
-
-                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, device_map="auto")
-                    model = model
+                if self.cache_hf_flag and self.cached_hf_model is None:
+                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    self.cached_hf_model = model
+                elif self.cache_hf_flag and self.cached_hf_model is not None:
+                    model = self.cached_hf_model
                 else:
-                    if self.cache_hf_flag and self.cached_hf_model is None:
-                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                        self.cached_hf_model = model
-                    elif self.cache_hf_flag and self.cached_hf_model is not None:
-                        model = self.cached_hf_model
-                    else:
-                        # No caching - load fresh each time
-                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    # No caching - load fresh each time
+                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model
@@ -2322,7 +2309,6 @@ class ModelArgs:
                     from transformers import Gemma3ForConditionalGeneration
 
                     model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
-                    model = model
                 else:
                     if self.cached_hf_model is None:
                         model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
@@ -2433,7 +2419,7 @@ class ModelArgs:
                 model = self.reference_transformer(wrap=False)
                 layer = model.model.embed_tokens
             else:
-                layer = reference_model.model.model.embed_tokens
+                layer = reference_model.model.embed_tokens
 
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
@@ -2447,12 +2433,10 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            model_name_env = os.getenv("HF_MODEL")
-            if hasattr(model.model, "rotary_emb_local"):
-                rotary_emb_local = model.model.rotary_emb_local
+            if hasattr(model.model, "rotary_emb_local") and model.model.rotary_emb_local is not None:
+                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb, model.model.rotary_emb_local)
             else:
-                rotary_emb_local = None
-            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb, rotary_emb_local)
+                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def reference_attention(self):
@@ -2463,7 +2447,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = self.from_hf_url or layer.__class__.__name__ in (
+            use_position_embeddings = layer.__class__.__name__ in (
                 "Qwen3Attention",
                 "MistralAttention",
                 "Gemma3Attention",
@@ -2658,7 +2642,6 @@ class HfDecoderWrapper:
                 position_ids=position_ids,
                 attention_mask=mask,
             )
-
         output = result[0]
         return output
 

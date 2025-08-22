@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import re
 from enum import Enum
 from typing import Optional
@@ -281,6 +282,23 @@ def apply_llama3_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_
             smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
             new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
+def compute_linear_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Linear scaling for rotary embeddings."""
+    freqs /= scale_factor
+    return freqs
+
+
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int, rope_type="llama3"):
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
+
+    if rope_type == "linear":
+        freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "llama3":
+        freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
+
+    return freqs
 
 
 def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
@@ -586,7 +604,11 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    from models.tt_transformers.tt.model import Transformer
+    if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
+        from models.experimental.gemma3.tt.text_model import Gemma3Transformer as Transformer
+    else:
+        from models.tt_transformers.tt.model import Transformer
+
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(
