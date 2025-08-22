@@ -12,6 +12,10 @@ from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.multimodal.mistral_24b.rmsnorm import RMSNorm
 from ttnn import ConcatMeshToTensor
 
+"""
+This file implements the Vision pixtral image submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
+"""
+
 
 class TTMistral3PatchMerger(LightweightModule):
     def __init__(
