@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: Â© 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 from safetensors.torch import load_file as safetensors_load_file
 from tqdm import tqdm
-
+model_name = os.getenv("HF_MODEL")
 
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
 def load_hf_state_dict(ckpt_dir):
@@ -101,7 +101,7 @@ def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
 def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
     checkpoint = {}
 
-    (f"Loading {len(checkpoints)} chunked checkpoint files")
+    (f"Loading {len(checkpoints)} checkpoint files")
     for ckpt in tqdm(checkpoints):
         if n_layers:
             # Layer range is in the file name, like layers_start-end.pth
@@ -134,7 +134,10 @@ def load_sharded_checkpoints(checkpoints, n_layers):
     logger.info(f"Loading {len(checkpoints)} sharded checkpoint files")
     for ckpt in tqdm(checkpoints):
         loaded_ckpt = torch.load(ckpt, map_location="cpu")
-        for key, value in loaded_ckpt.items():
+        for (
+            key,
+            value,
+        ) in loaded_ckpt.items():
             if "layers." in key:
                 layer_num = int(key.split("layers.")[1].split(".")[0])
                 if n_layers and layer_num >= n_layers:
@@ -147,10 +150,10 @@ def load_sharded_checkpoints(checkpoints, n_layers):
 
     # concat checkpoint values
     for key, value in checkpoint.items():
-        if len(value) == 1 or is_param_replicated_across_shards(key):
+        if len(value) == 1 or "norm" in key:
             checkpoint[key] = value[0]
         else:
-            if key.endswith("tok_embeddings.weight") or key.endswith("output.weight"):
+            if key == "tok_embeddings.weight" or key == "output.weight":
                 assert value[0].shape[1] == 8192  # FIXME: do we need this hardcoded shape?
                 # Concatenate along dimension 0 for llama3 token embeddings weight and lm head
                 checkpoint[key] = torch.cat(value, dim=0)
@@ -256,12 +259,41 @@ def map_hf_to_meta_keys(loaded_weights):
     return replace_keys(loaded_weights, replacements)
 
 
+def map_vision_meta_to_hf_keys(loaded_weights):
+    """
+    Map Hugging Face checkpoint keys to Meta checkpoint keys.
+    You can use this to support other models by adding more mappings.
+    See replace_keys for more details on the format of replacements.
+    """
+    inverted_mapping = [
+        ("attention_norm", "input_layernorm"),
+        ("ffn_norm", "post_attention_layernorm"),
+        ("attention", "self_attn"),
+        ("feed_forward", "mlp"),
+        ("w1", "gate_proj"),
+        ("w2", "down_proj"),
+        ("w3", "up_proj"),
+        ("wq", "q_proj"),
+        ("wk", "k_proj"),
+        ("wv", "v_proj"),
+        ("wo", "o_proj"),
+    ]
+
+    return replace_keys(loaded_weights, inverted_mapping)
+
+
+def convert_vision_meta_to_hf(state_dict, head_dim):
+    # state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
+    state_dict = map_vision_meta_to_hf_keys(state_dict)
+    return state_dict
+
+
 def map_meta_to_hf_keys(loaded_weights):
     # Define mappings at each level of the hierarchy
     meta_to_hf_mappings = {
         # Top level
         "tok_embeddings.weight": "model.embed_tokens.weight",
-        "norm.weight": "model.norm.weight",
+        # "norm.weight": "model.norm.weight",
         "output.weight": "lm_head.weight",
         # Layer level
         "attention_norm.weight": "input_layernorm.weight",
@@ -304,7 +336,9 @@ def map_meta_to_hf_keys(loaded_weights):
         # Host embeddings
         "emb.weight": "weight",
     }
-
+    # Add norm.weight mapping for non-Mistral models
+    if model_name != "mistralai/Mistral-Small-3.1-24B-Instruct-2503":
+        meta_to_hf_mappings["norm.weight"] = "model.norm.weight"
     hf_state_dict = {}
     for key, tensor in loaded_weights.items():
         # Handle full model paths with layer numbers
@@ -325,7 +359,7 @@ def map_meta_to_hf_keys(loaded_weights):
         # For submodule state dicts, try matching the end of the key
         matched = False
         for meta_pattern, hf_pattern in meta_to_hf_mappings.items():
-            if key.endswith("." + meta_pattern):
+            if key.endswith(meta_pattern) and key[-len(meta_pattern) :] != meta_pattern:
                 # Replace only the matching part at the end
                 prefix = key[: -len(meta_pattern)]
                 new_key = prefix + hf_pattern
@@ -336,6 +370,7 @@ def map_meta_to_hf_keys(loaded_weights):
         # If no mapping found, keep the original key
         if not matched:
             hf_state_dict[key] = tensor
+        
 
     return hf_state_dict
 
