@@ -567,6 +567,7 @@ class ModelArgs:
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "Mistral-Small-3.1-24B-Instruct-2503": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -1624,14 +1625,6 @@ class ModelArgs:
             "relu": ttnn.UnaryOpType.RELU,
             "silu": ttnn.UnaryOpType.SILU,
         }.get(act_layer, ttnn.UnaryOpType.GELU)
-
-        # Optional tuning knobs
-        # self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
-        # self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
-
-        # # Optional Meta-specific knobs
-        # self.vision_max_num_chunks = vision_config.get("max_num_chunks", 4)
-        # self.vision_num_cross_attention_layers = vision_config.get("num_cross_attention_layers", -1)
 
     def _set_hf_params(self, checkpoint_dir):
         def merge_text_config(base_config):
