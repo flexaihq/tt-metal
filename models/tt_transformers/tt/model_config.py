@@ -1711,6 +1711,7 @@ class ModelArgs:
         )
         self.vision_dim = vision_config.get("hidden_size", 1280)
 
+
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
         self.vision_image_size = vision_config.get("image_size", 1540)
         self.vision_rope_theta = vision_config.get("rope_theta", 10000.0)
@@ -2723,13 +2724,6 @@ class ModelArgs:
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
-    def reference_vision_mlp(self, layer_idx=0):
-        model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.transformer.layers[layer_idx].feed_forward
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        return layer
-
     def reference_vision_rms(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.transformer.layers[0].ffn_norm
@@ -2749,8 +2743,6 @@ class ModelArgs:
         layer = model.vision_tower.vision_model.embeddings.patch_embedding
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_pos_embedding(self):
@@ -2758,8 +2750,6 @@ class ModelArgs:
         layer = model.vision_tower.vision_model.embeddings.position_embedding
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_embedding(self):
@@ -2803,8 +2793,6 @@ class ModelArgs:
         layer = model.vision_tower.vision_model.encoder.layers[0]
         # layer._load_state_dict = layer.load_state_dict
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
-        layer._load_state_dict = layer.load_state_dict
-        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
 
     def reference_vision_encoder(self):
@@ -2878,7 +2866,7 @@ class ModelArgs:
             layer = model.model.layers[0].self_attn
             use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
             wrapper = HfAttentionWrapper(
-                layer, self.head_dim, model.model.rotary_emb wif use_position_embeddings else None
+                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
             return wrapper
 

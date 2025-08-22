@@ -11,10 +11,6 @@ from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 import ttnn
 from ttnn import ConcatMeshToTensor
 
-"""
-This file implements the Vision pixtral image submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
-"""
-
 
 class TTMistral3PatchMerger(LightweightModule):
     def __init__(

@@ -713,7 +713,6 @@ def map_vision_meta_to_hf_keys(loaded_weights):
         mapping = base_mapping
     else:
         mapping = base_mapping + extra_mapping
-
     return replace_keys(loaded_weights, mapping)
 
 
