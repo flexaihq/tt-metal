@@ -1380,8 +1380,6 @@ class ModelArgs:
 
     def _get_text_prefix(self):
         if self.is_vision():
-            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                return "language_model."
             return "text_model."
         else:
             return ""
