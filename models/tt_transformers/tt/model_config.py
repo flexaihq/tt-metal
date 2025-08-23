@@ -1387,7 +1387,7 @@ class ModelArgs:
         xs_1BSH = ttnn.from_torch(
             x_1BSH,
             device=self.mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,

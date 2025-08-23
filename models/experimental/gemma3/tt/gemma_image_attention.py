@@ -23,6 +23,7 @@ class TtGemmaImageAttention(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -34,7 +35,7 @@ class TtGemmaImageAttention(LightweightModule):
         self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.num_devices = configuration.num_devices
-
+        self.tt_ccl = tt_ccl
         self.hidden_size = configuration.vision_dim
         self.n_heads = configuration.vision_attn_n_heads
         self.head_dim = self.hidden_size // self.n_heads
@@ -366,10 +367,22 @@ class TtGemmaImageAttention(LightweightModule):
         if seq_len > MAX_MM_SEQ_LEN:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])
 
-        if self.num_devices > 1:
-            # self.bo = ttnn.all_gather(self.bo, dim=3, num_links=1)
-            attn_output_11SH = ttnn.all_gather(attn_output_11SH, dim=3, num_links=1)
-
+        # if self.num_devices > 1:
+        #     # self.bo = ttnn.all_gather(self.bo, dim=3, num_links=1)
+        #     attn_output_11SH = ttnn.all_gather(attn_output_11SH, dim=3, num_links=1)
+        if self.num_devices > 1:  # replace with reduce_scatter and all_gather
+            attn_output_11SH = ttnn.experimental.all_gather_async(
+                attn_output_11SH,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,

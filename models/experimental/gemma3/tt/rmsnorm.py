@@ -154,7 +154,7 @@ class RMSNorm(LightweightModule):
         assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
 
         # Run distributed rmsnorm part 1
-        tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+        tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat8_b)
         # AllGather stats
         if self.tt_ccl:
             tt_stats = ttnn.experimental.all_gather_async(
