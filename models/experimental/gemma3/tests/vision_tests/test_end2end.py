@@ -619,6 +619,18 @@ def run_generation_loop(
     ),
 )
 @pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 30000000,
+            "num_command_queues": 1,
+            "l1_small_size": 10 * 1024,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "page_params",
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
@@ -628,7 +640,7 @@ def run_generation_loop(
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (2048,),  # Use smaller seq_len like test_end2end.py to avoid memory issues
+    (1024 * 8,),  # Use smaller seq_len like test_end2end.py to avoid memory issues
 )
 @pytest.mark.parametrize(
     "optimizations",
@@ -640,13 +652,12 @@ def run_generation_loop(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_e2e_vision_text_pipeline(
     weights,
     layers,
@@ -664,8 +675,7 @@ def test_e2e_vision_text_pipeline(
     logger.info("Starting E2E vision-text pipeline test")
 
     # Use bfloat8_b like test_end2end.py for better memory efficiency
-    dtype = ttnn.bfloat16
-
+    dtype = ttnn.bfloat8_b
     # Setup vision-enabled model configuration
     model_args, instruct = setup_vision_model_args(weights, max_seq_len, batch_size, mesh_device, optimizations)
 

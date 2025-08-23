@@ -385,7 +385,7 @@ def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: in
     return freqs
 
 
-def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, rope_type="llama3"):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 

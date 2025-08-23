@@ -186,7 +186,7 @@ class Gemma3Transformer(LightweightModule):
             tokens_embd = ttnn.from_torch(
                 tokens_embd,
                 device=self.mesh_device,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
@@ -200,8 +200,11 @@ class Gemma3Transformer(LightweightModule):
                     tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
                 )
                 comp_vision_output = ttnn.to_torch(
-                    vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-                )[:, :, : vision_output.shape[0]]
+                    vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+                )[:, : vision_output.shape[-1]]
+
+                sliced_token_embds = tokens_embd[: tokens_embd.shape[0]]
+
                 comp_vision_output = torch.nn.functional.pad(
                     comp_vision_output, (0, 0, 0, tokens_embd.shape[1] - comp_vision_output.shape[1]), "constant", 0
                 )
@@ -213,8 +216,14 @@ class Gemma3Transformer(LightweightModule):
                 special_image_mask = special_image_mask.expand_as(tokens_embd)
                 image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
                 tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
-                tokens_embd = self.args.prepare_residual_tensor_prefill(
+                tokens_embd = ttnn.from_torch(
                     tokens_embd,
+                    dtype=ttnn.bfloat16,
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(None, 2), mesh_shape=list(self.mesh_device.shape)
+                    ),
                 )
 
                 # vision_output_torch = ttnn.to_torch(
