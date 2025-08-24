@@ -1,5 +1,5 @@
 """
-This is the Vision Transformer Block for Gemma3.
+This is the Vision Transformer Block for Gemma-3-4b-it.
 This involves vision followed by MultiModalProjector processing
 """
 
@@ -7,9 +7,10 @@ This involves vision followed by MultiModalProjector processing
 
 # SPDX-License-Identifier: Apache-2.0
 
+
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.gemma3.tt.gemma_vision_model import TtSiglipGemmaVisionModel
-from models.experimental.gemma3.tt.mmp import TtGemma3MultiModalProjector
+from models.tt_transformers.tt.multimodal.gemma3.gemma_vision_block import TtGemmaVisionModel
+from models.tt_transformers.tt.multimodal.gemma3.multi_modal_projector import TtGemma3MultiModalProjector
 
 
 class TtGemmaTransformerVision(LightweightModule):
@@ -35,7 +36,7 @@ class TtGemmaTransformerVision(LightweightModule):
         self.patch_size = configuration.vision_patch_size
         self.configuration = configuration
 
-        self.vision_encoder = TtSiglipGemmaVisionModel(
+        self.vision_encoder = TtGemmaVisionModel(
             mesh_device,
             state_dict,
             state_dict_prefix=configuration.state_dict_vision_prefix,

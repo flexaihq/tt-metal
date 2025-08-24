@@ -46,6 +46,7 @@ class TransformerBlock(LightweightModule):
         self.model_config = args.get_model_config()
         self.is_mixture_of_experts = False
         self.layer_num = layer_num
+        self.num_devices = args.num_devices
 
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
 
@@ -136,6 +137,7 @@ class TransformerBlock(LightweightModule):
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
+
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
                 RMSNorm(
@@ -143,12 +145,12 @@ class TransformerBlock(LightweightModule):
                     dim=args.dim,
                     eps=args.norm_eps,
                     state_dict=state_dict,
-                    add_unit_offset=self.args.rms_norm_add_unit_offset,
                     state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                     weight_cache_path=None if args.dummy_weights else weight_cache_path,
                     weight_dtype=ttnn.bfloat16,
                     weight_key="pre_feedforward_layernorm",
                     is_distributed=self.args.is_distributed_norm,
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
                     sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                     sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                     ccl_topology=self.args.ccl_topology(),
@@ -168,13 +170,13 @@ class TransformerBlock(LightweightModule):
                     device=mesh_device,
                     dim=args.dim,
                     eps=args.norm_eps,
-                    add_unit_offset=self.args.rms_norm_add_unit_offset,
                     state_dict=state_dict,
                     state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                     weight_cache_path=None if args.dummy_weights else weight_cache_path,
                     weight_dtype=ttnn.bfloat16,
                     weight_key="post_feedforward_layernorm",
                     is_distributed=self.args.is_distributed_norm,
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
                     sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                     sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                     ccl_topology=self.args.ccl_topology(),
@@ -203,6 +205,7 @@ class TransformerBlock(LightweightModule):
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         residual = x
+
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         assert (
@@ -228,65 +231,71 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
+        if self.pre_ff_norm == None:
+            # Here x and attn_out are both fractured across devices
+            attn_out = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
 
-        if self.pre_ff_norm is None:
-            hidden_states = ttnn.add(
-                residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
-            )
-            residual = hidden_states
-            if mode == "prefill":
-                x.deallocate(True)
-        else:
-            hidden_states = attn_out
-        hidden_states = self.ff_norm(hidden_states, mode)
+            residual = attn_out
+
+        # Norms take fractured inputs and output replicated across devices
+        hidden_states = self.ff_norm(attn_out, mode)
+
         if self.pre_ff_norm is not None:
-            # The output of the ff_norm is replicated across the device
-            # but the residual is fractured across the devices
+            # NOTE: The output of ff_norm is gathered, while the input to the add is fractured.
+            # To align them, we use tt_all_reduce to fracture the hidden_states across devices.
+            # Since tt_all_reduce performs a sum across devices, we divide by num_devices
+            # to restore the original values.
             if self.num_devices > 1:
                 hidden_states = tt_all_reduce(
                     hidden_states,
                     self.mesh_device,
-                    tt_ccl=self.tt_ccl,
+                    self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
                     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
                     num_all_gather_links=self.args.num_all_gather_links,
-                    topology=ttnn.Topology.Ring,
+                    topology=self.args.ccl_topology(),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,
                 )
 
                 hidden_states = ttnn.div(hidden_states, self.num_devices)
-            hidden_states = ttnn.add(
-                residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
-            )
+
+            hidden_states = ttnn.add(residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
+
             residual = hidden_states
+
             hidden_states = self.pre_ff_norm(hidden_states, mode)
+
+        if mode == "prefill":
+            x.deallocate(True)
 
         ttnn.deallocate(attn_out)
 
         if TG and mode == "decode":
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
-
         hidden_states = self.feed_forward.forward(hidden_states, mode)
-
+        # takes and residual are both fractured across devices
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
-
         if self.post_ff_norm is not None:
-            hidden_states = self.post_ff_norm(hidden_states, mode)  # Gathered
+            hidden_states = self.post_ff_norm(hidden_states, mode)
+            # NOTE: The output of post_ff_norm is gathered, while the inputs to the add is fractured.
+            # To align them, we use tt_all_reduce to fracture the hidden_states across devices.
+            # Since tt_all_reduce performs a sum across devices, we divide by num_devices
+            # to restore the original values.
             if self.num_devices > 1:
                 hidden_states = tt_all_reduce(
                     hidden_states,
                     self.mesh_device,
-                    tt_ccl=self.tt_ccl,
+                    self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
                     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
                     num_all_gather_links=self.args.num_all_gather_links,
-                    topology=ttnn.Topology.Ring,
+                    topology=self.args.ccl_topology(),
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,
                 )

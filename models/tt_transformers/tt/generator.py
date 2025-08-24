@@ -61,13 +61,7 @@ class Generator:
 
     # Note: This function is called by vLLM
     def prefill_forward_text(
-        self,
-        tokens: torch.Tensor,
-        page_table=None,
-        kv_cache=None,
-        prompt_lens=None,
-        empty_slots=None,
-        **kwargs,
+        self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, empty_slots=None, **kwargs
     ):
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
