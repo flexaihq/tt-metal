@@ -525,7 +525,7 @@ class Gemma3ForConditionalGeneration(Generator, SupportsMultiModal):
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
     ):
-        from models.demos.gemma3.demo.vision_demo import create_multimodal_model
+        from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
