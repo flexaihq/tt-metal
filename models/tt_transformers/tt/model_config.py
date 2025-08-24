@@ -1143,6 +1143,11 @@ class ModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
+            self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = (
+                ttnn.DRAM_MEMORY_CONFIG if self.base_model_name.startswith("gemma-3") else ttnn.L1_MEMORY_CONFIG
+            )
+            self.lm_head_dtype = ttnn.bfloat16 if self.base_model_name.startswith("gemma-3") else None
+
             # Vision model configs
             self.model_config["IMAGE_MLP_FC_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
                 m=min(seq_len, max_seq),

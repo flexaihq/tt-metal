@@ -12,11 +12,10 @@ TtGemmaImageAttention and TtGemmaImageFeedForward
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-from models.experimental.gemma3.tt.gemma_image_attention import TtGemmaImageAttention
-from models.experimental.gemma3.tt.gemma_image_mlp import TtGemmaImageFeedForward
-from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.multimodal.gemma3.gemma_image_attention import TtGemmaImageAttention
+from models.tt_transformers.tt.multimodal.gemma3.gemma_image_mlp import TtGemmaImageFeedForward
+from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 
 
 class TtGemmaImageTransformerBlock(LightweightModule):

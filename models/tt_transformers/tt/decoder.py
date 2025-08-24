@@ -5,6 +5,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
+from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
@@ -42,6 +43,7 @@ class TransformerBlock(LightweightModule):
         self.model_config = args.get_model_config()
 
         self.layer_num = layer_num
+        self.num_devices = args.num_devices
 
         ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
 
@@ -110,6 +112,58 @@ class TransformerBlock(LightweightModule):
             TG=args.is_galaxy,
         )
 
+        if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
+            self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
+                RMSNorm(
+                    device=mesh_device,
+                    dim=args.dim,
+                    eps=args.norm_eps,
+                    state_dict=state_dict,
+                    state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key="pre_feedforward_layernorm",
+                    is_distributed=self.args.is_distributed_norm,
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
+                    sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                    ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
+                ),
+                args,
+                tt_ccl=self.tt_ccl,
+                TG=args.is_galaxy,
+            )
+        else:
+            # If pre_feedforward_layernorm is not in state_dict, we do not use it
+            self.pre_ff_norm = None
+
+        if f"layers.{layer_num}.post_feedforward_layernorm.weight" in state_dict:
+            self.post_ff_norm = DistributedNorm(  # post_feedforward_layernorm
+                RMSNorm(
+                    device=mesh_device,
+                    dim=args.dim,
+                    eps=args.norm_eps,
+                    state_dict=state_dict,
+                    state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key="post_feedforward_layernorm",
+                    is_distributed=self.args.is_distributed_norm,
+                    add_unit_offset=self.args.rms_norm_add_unit_offset,
+                    sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
+                    sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                    ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
+                ),
+                args,
+                tt_ccl=self.tt_ccl,
+                TG=args.is_galaxy,
+            )
+        else:
+            # If post_feedforward_layernorm is not in state_dict, we do not use it
+            self.post_ff_norm = None
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -124,6 +178,8 @@ class TransformerBlock(LightweightModule):
         kv_cache=None,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
+        residual = x
+
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         assert (
@@ -149,25 +205,80 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        # Here x and attn_out are both fractured across devices
-        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
-        ttnn.deallocate(attn_out)
+        if self.pre_ff_norm == None:
+            # Here x and attn_out are both fractured across devices
+            attn_out = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
+
+            residual = attn_out
+
+        # Norms take fractured inputs and output replicated across devices
+        hidden_states = self.ff_norm(attn_out, mode)
+
+        if self.pre_ff_norm is not None:
+            # NOTE: The output of ff_norm is gathered, while the input to the add is fractured.
+            # To align them, we use tt_all_reduce to fracture the hidden_states across devices.
+            # Since tt_all_reduce performs a sum across devices, we divide by num_devices
+            # to restore the original values.
+            if self.num_devices > 1:
+                hidden_states = tt_all_reduce(
+                    hidden_states,
+                    self.mesh_device,
+                    self.tt_ccl,
+                    cluster_axis=0,
+                    dim=3,
+                    num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+                    num_all_gather_links=self.args.num_all_gather_links,
+                    topology=self.args.ccl_topology(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=self.args.ccl_dtype,
+                )
+
+                hidden_states = ttnn.div(hidden_states, self.num_devices)
+
+            hidden_states = ttnn.add(residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
+
+            residual = hidden_states
+
+            hidden_states = self.pre_ff_norm(hidden_states, mode)
+
         if mode == "prefill":
             x.deallocate(True)
 
-        # Norms take fractured inputs and output replicated across devices
-        ff_in = self.ff_norm(h, mode)
+        ttnn.deallocate(attn_out)
+
         if TG and mode == "decode":
-            ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
+            hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
-        ff_out = self.feed_forward.forward(ff_in, mode)
-        # ff_out and h are both fractured across devices
+        hidden_states = self.feed_forward.forward(hidden_states, mode)
+        # takes and residual are both fractured across devices
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
+        if self.post_ff_norm is not None:
+            hidden_states = self.post_ff_norm(hidden_states, mode)
+            # NOTE: The output of post_ff_norm is gathered, while the inputs to the add is fractured.
+            # To align them, we use tt_all_reduce to fracture the hidden_states across devices.
+            # Since tt_all_reduce performs a sum across devices, we divide by num_devices
+            # to restore the original values.
+            if self.num_devices > 1:
+                hidden_states = tt_all_reduce(
+                    hidden_states,
+                    self.mesh_device,
+                    self.tt_ccl,
+                    cluster_axis=0,
+                    dim=3,
+                    num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+                    num_all_gather_links=self.args.num_all_gather_links,
+                    topology=self.args.ccl_topology(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=self.args.ccl_dtype,
+                )
+
+                hidden_states = ttnn.div(hidden_states, self.num_devices)
+
         out = ttnn.add(
-            h,
-            ff_out,
+            residual,
+            hidden_states,
             memory_config=skip_mem_cfg,
             dtype=self.args.ccl_dtype
             if TG and not self.args.is_distributed_norm(mode)
