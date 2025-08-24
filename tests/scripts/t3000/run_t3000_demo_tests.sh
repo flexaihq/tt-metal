@@ -153,6 +153,30 @@ run_t3000_qwen3_tests() {
   fi
 }
 
+run_t3000_gemma_3_27b_tests() {
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_gemma_3_27b_tests"
+
+  wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
+
+  # Gemma-3-27B
+  gemma3_27b=/mnt/MLPerf/tt_dnn-models/google/gemma-3-27b-it
+  mesh_device=T3K
+
+  MESH_DEVICE=$mesh_device HF_MODEL=$gemma3_27b pytest -n auto models/tt_transformers/demo/simple_vision_demo.py -k "batch1-notrace" --timeout 1200; fail+=$?
+  echo "LOG_METAL: Gemma-3-27B tests for $mesh_device completed"
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_gemma_3_27b_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_llama3_vision_tests() {
   # Record the start time
   fail=0
