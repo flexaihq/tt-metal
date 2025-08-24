@@ -198,12 +198,11 @@ class Gemma3Transformer(LightweightModule):
                 vision_output = vision_model(pixel_values)
                 tokens_embd = ttnn.to_torch(
                     tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
-                )
+                )[:, :, : tokens_embd.shape[-1]]
+
                 comp_vision_output = ttnn.to_torch(
                     vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
-                )[:, : vision_output.shape[-1]]
-
-                sliced_token_embds = tokens_embd[: tokens_embd.shape[0]]
+                )[:, :, :, : vision_output.shape[-1]]
 
                 comp_vision_output = torch.nn.functional.pad(
                     comp_vision_output, (0, 0, 0, tokens_embd.shape[1] - comp_vision_output.shape[1]), "constant", 0
@@ -225,22 +224,6 @@ class Gemma3Transformer(LightweightModule):
                         self.mesh_device, dims=(None, 2), mesh_shape=list(self.mesh_device.shape)
                     ),
                 )
-
-                # vision_output_torch = ttnn.to_torch(
-                #     vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
-                # )[:, : vision_output.shape[-1]]
-                # sliced_token_embds = tokens_embd[: tokens_embd.shape[0]]
-
-                # image_features = vision_output_torch
-                # # image_features = image_features.squeeze(0)
-                # special_image_mask = (input_ids == self.args.image_token_index).unsqueeze(-1)
-                # special_image_mask = special_image_mask.expand_as(tokens_embd)
-                # image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
-                # tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
-
-                # tokens_embd = self.args.prepare_residual_tensor_prefill(
-                #     tokens_embd,
-                # )
 
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
         # Slice the rot mats to the prefill seqlen

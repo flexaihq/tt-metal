@@ -17,7 +17,7 @@ from models.tt_transformers.tt.load_checkpoints import (  # convert_vision_hf_to
 )
 from models.tt_transformers.tt.model_config import ModelArgs
 
-
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.experimental.gemma3.tt.gemma_image_attention import TtGemmaImageAttention
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
@@ -59,9 +59,10 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
     n_heads = model_args.vision_attn_n_heads
     head_dim = hidden_size // n_heads
     seq_len = model_args.vision_chunk_ntok
-
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtGemmaImageAttention(
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),

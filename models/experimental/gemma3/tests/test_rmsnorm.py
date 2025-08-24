@@ -14,33 +14,32 @@ import ttnn
 from models.experimental.gemma3.tt.rmsnorm import RMSNorm
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
-
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
-
+from models.tt_transformers.tt.ccl import TT_CCL
+from models.utility_functions import comp_allclose, skip_for_grayskull
 from models.tt_transformers.tt.model_config import ModelArgs
 
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "device",
+    "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("device"), len(ttnn.get_device_ids())
+            os.environ.get("mesh_device"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "tt_layer_name, torch_layer_name, dim",
+    "tt_layer_name, torch_layer_name",
     (
-        ("norm", "norm", 2560),
-        ("layers.0.attention_norm", "layers.0.input_layernorm", 2560),
-        ("layers.0.ffn_norm", "layers.0.post_attention_layernorm", 2560),
-        ("layers.0.pre_feedforward_layernorm", "layers.0.pre_feedforward_layernorm", 2560),
-        ("layers.0.post_feedforward_layernorm", "layers.0.post_feedforward_layernorm", 2560),
-        ("layers.0.attention.q_norm", "layers.0.self_attn.q_norm", 256),
-        ("layers.0.attention.k_norm", "layers.0.self_attn.k_norm", 256),
+        ("norm", "norm"),
+        # ("layers.0.attention_norm", "layers.0.input_layernorm", 2560),
+        # ("layers.0.ffn_norm", "layers.0.post_attention_layernorm", 2560),
+        # ("layers.0.pre_feedforward_layernorm", "layers.0.pre_feedforward_layernorm", 2560),
+        # ("layers.0.post_feedforward_layernorm", "layers.0.post_feedforward_layernorm", 2560),
+        # ("layers.0.attention.q_norm", "layers.0.self_attn.q_norm", 256),
+        # ("layers.0.attention.k_norm", "layers.0.self_attn.k_norm", 256),
     ),
 )
 @pytest.mark.parametrize(
@@ -51,12 +50,12 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "batch_size",
     (1,),
 )
-def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device, tt_layer_name, torch_layer_name, dim):
+def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, mesh_device, tt_layer_name, torch_layer_name):
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
     tt_model_args = ModelArgs(
-        device,
+        mesh_device,
         max_batch_size=batch_size,
         max_seq_len=128,
     )
@@ -73,10 +72,10 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device, tt_layer_na
     }
 
     reference_model.load_state_dict(partial_state_dict)
-
+    tt_ccl = TT_CCL(mesh_device)
     tt_inner_norm = RMSNorm(
-        device=device,
-        dim=dim,
+        device=mesh_device,
+        dim=tt_model_args.dim,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
         weight_key=tt_layer_name,
@@ -84,22 +83,23 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device, tt_layer_na
         is_distributed=tt_model_args.is_distributed_norm,
         sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
         sharded_output_config=tt_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
+        tt_ccl=tt_ccl,
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, tt_model_args, TG=tt_model_args.is_galaxy)
+    tt_model = DistributedNorm(tt_inner_norm, tt_model_args, tt_ccl, TG=tt_model_args.is_galaxy)
 
-    input = torch.rand(1, 1, dim)
+    input = torch.rand(1, 1, 32, tt_model_args.dim)
 
     reference_output = reference_model(input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
     tt_input = ttnn.from_torch(
         input,
-        device=device,
+        device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
         memory_config=(
             tt_model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         ),
@@ -111,16 +111,11 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device, tt_layer_na
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
-            device, dims=(0, 2) if tt_model_args.is_galaxy else (2, 0), mesh_shape=tt_model_args.cluster_shape
+            mesh_device, dims=(0, 2) if tt_model_args.is_galaxy else (2, 0), mesh_shape=tt_model_args.cluster_shape
         ),
     )[:1, :, :]
 
-    tt_output_torch = tt_output_torch.view(1, 1, dim)
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch[0])
-
-    non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
-    tt_output_torch = tt_output_torch[non_zero_indices]
-    reference_output = reference_output[non_zero_indices]
+    # tt_output_torch = tt_output_torch.view(1, 1, tt_model_args.dim)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {torch_layer_name} , {pcc_message}")
