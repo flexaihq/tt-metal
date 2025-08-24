@@ -19,10 +19,10 @@ from models.tt_transformers.tt.model_config import ModelArgs
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "device",
+    "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("device"), len(ttnn.get_device_ids())
+            os.environ.get("mesh_device"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -35,12 +35,12 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "batch_size",
     (1,),
 )
-def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
+def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, mesh_device):
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
     tt_model_args = ModelArgs(
-        device,
+        mesh_device,
         max_batch_size=batch_size,
         max_seq_len=128,
     )
@@ -58,7 +58,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     # reference_model.load_state_dict(partial_state_dict)
 
     tt_inner_norm = RMSNorm(
-        device=device,
+        device=mesh_device,
         dim=1152,
         state_dict=state_dict,
         state_dict_prefix="",
@@ -79,10 +79,10 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
     tt_input = ttnn.from_torch(
         input,
-        device=device,
+        device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
         memory_config=(
             tt_model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         ),
@@ -94,7 +94,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
-            device, dims=(0, 2) if tt_model_args.is_galaxy else (2, 0), mesh_shape=tt_model_args.cluster_shape
+            mesh_device, dims=(0, 2) if tt_model_args.is_galaxy else (2, 0), mesh_shape=tt_model_args.cluster_shape
         ),
     )[:1, :, :]
     tt_output_torch = tt_output_torch.view(1, 1, 1152)

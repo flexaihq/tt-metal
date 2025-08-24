@@ -15,6 +15,7 @@ import ttnn
 from models.experimental.gemma3.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 @torch.no_grad()
@@ -37,7 +38,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     indirect=True,
 )
 def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
-    dtype = ttnn.bfloat16
+    dtype = ttnn.bfloat8_b
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
     model_args.n_layers = 1
@@ -53,9 +54,11 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     reference_model = model_args.reference_lm_head()
     reference_model.load_state_dict(partial_state_dict)
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = LMHead(
         args=model_args,
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         dtype=dtype,
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,

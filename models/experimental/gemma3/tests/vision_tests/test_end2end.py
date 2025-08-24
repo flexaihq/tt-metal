@@ -188,7 +188,7 @@ def setup_vision_reference_model(model_args, run_ref_pt):
 
 def process_real_vision_inputs(messages, model_args):
     """Process real image inputs using AutoProcessor (Interface Segregation)."""
-    model_id = "google/gemma-3-27b-it"
+    model_id = model_args.CKPT_DIR
     processor = AutoProcessor.from_pretrained(model_id)
 
     # Process the multimodal messages similar to test_end2end.py

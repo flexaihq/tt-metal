@@ -18,6 +18,7 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 @torch.no_grad()
@@ -115,9 +116,11 @@ def test_decoder_inference(
         )
 
     # Initialize TT model
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TransformerBlock(
         args=model_args,
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         dtype=dtype,
         state_dict=state_dict,
         layer_num=0,
@@ -127,6 +130,15 @@ def test_decoder_inference(
     )
 
     seqlen = 1
+
+    cos, sin = precompute_freqs(
+        model_args.head_dim,
+        model_args.max_seq_len * 2,
+        model_args.rope_theta,
+        model_args.rope_scaling.factor if model_args.rope_scaling else None,
+        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+    )
+    freqs_cis = torch.complex(cos, sin)
 
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
@@ -160,7 +172,8 @@ def test_decoder_inference(
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=[rot_mat_global, rot_mat_local],
+            rot_mats_global=rot_mat_global,
+            rot_mats_local=rot_mat_local,
             mode="decode",
             page_table=page_table_tt,
         )

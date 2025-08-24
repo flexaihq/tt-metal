@@ -128,11 +128,6 @@ class RMSNorm(LightweightModule):
         else:
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
 
-        # if x.shape[-1] % weight.shape[-1] == 0:
-        #     # Reshape weight only if x's last dimension is divisible by weight's last dimension,
-        #     # to avoid padding errors in RMSNorm when dimensions are not aligned
-        #     weight = ttnn.reshape(weight, [1, 1, 1, -1])
-
         x = norm(
             x,
             epsilon=self.eps,
@@ -154,30 +149,21 @@ class RMSNorm(LightweightModule):
         assert memory_config is None, "Distributed RMSNorm does not support sharded outputs"
 
         # Run distributed rmsnorm part 1
-        tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat8_b)
+        tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
         # AllGather stats
-        if self.tt_ccl:
-            tt_stats = ttnn.experimental.all_gather_async(
-                tt_stats,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
-        else:
-            tt_stats = ttnn.all_gather(
-                tt_stats,
-                dim=3,
-                num_links=1,
-                topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+        tt_stats = ttnn.experimental.all_gather_async(
+            tt_stats,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=1,
+            topology=self.ccl_topology,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
             inp,

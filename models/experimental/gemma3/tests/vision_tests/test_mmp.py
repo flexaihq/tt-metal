@@ -21,10 +21,10 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "device",
+    "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("device"), len(ttnn.get_device_ids())
+            os.environ.get("mesh_device"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -38,12 +38,12 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     (1,),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
+def test_multi_modal_inference(seq_len, batch_size, reset_seeds, mesh_device):
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
     tt_model_args = ModelArgs(
-        device,
+        mesh_device,
         max_batch_size=batch_size,
         max_seq_len=128,
     )
@@ -62,15 +62,15 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
     tt_input = ttnn.from_torch(
         input,
-        device=device,
+        device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     tt_model = TtGemma3MultiModalProjector(
-        mesh_device=device,
+        mesh_device=mesh_device,
         state_dict=state_dict,
         state_dict_prefix="model.multi_modal_projector",
         image_size=tt_model_args.vision_chunk_size,
@@ -84,7 +84,11 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
     )
     tt_output = tt_model(tt_input)
 
-    tt_output_torch = ttnn.to_torch(tt_output)
+    print("tt_output ", tt_output.shape)
+
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
+        :, :, :, : tt_output.shape[-1]
+    ]
     tt_output_torch = tt_output_torch.view(reference_output.shape)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
