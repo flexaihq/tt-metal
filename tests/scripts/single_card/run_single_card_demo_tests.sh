@@ -21,6 +21,12 @@ run_qwen7b_func() {
 
 }
 
+run_deepseek_r1_distill_qwen_14b_func() {
+
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-Distill-Qwen-14B MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
+
+}
+
 run_qwen25_vl_func() {
   fail=0
 
