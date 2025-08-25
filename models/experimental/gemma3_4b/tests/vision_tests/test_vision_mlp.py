@@ -43,8 +43,11 @@ def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds):
     first_layer_prefix = model_args.get_state_dict_prefix("MLP", 0, is_vision=True)
 
     # Add "encoder." after "visual." in first_layer_prefix
-    if first_layer_prefix.startswith("visual."):
-        first_layer_prefix = "visual.encoder." + first_layer_prefix[len("visual.") :]
+    if first_layer_prefix.startswith(f"{model_args.state_dict_vision_prefix}."):
+        first_layer_prefix = (
+            f"{model_args.state_dict_vision_prefix}.encoder."
+            + first_layer_prefix[len(model_args.state_dict_vision_prefix) :]
+        )
 
     model_args.WEIGHTS_DTYPE = dtype
 

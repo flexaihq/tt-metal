@@ -42,7 +42,7 @@ def test_gemma_vision(
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
 
-    first_layer_prefix = "visual."
+    first_layer_prefix = f"{model_args.state_dict_vision_prefix}."
     # partial_state_dict = {
     #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     # }

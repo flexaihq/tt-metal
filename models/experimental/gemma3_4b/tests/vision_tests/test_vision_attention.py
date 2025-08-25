@@ -47,7 +47,7 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = "visual.encoder.layers.0.attn."
+    first_layer_prefix = f"{model_args.state_dict_vision_prefix}.encoder.layers.0.attn."
     # partial_state_dict = {
     #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     # }
