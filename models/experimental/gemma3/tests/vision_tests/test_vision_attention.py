@@ -36,7 +36,12 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
-def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    indirect=True,
+)
+def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds, device_params):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 
@@ -80,7 +85,8 @@ def test_attention_inference(batch, num_chunks, mesh_device, reset_seeds):
     tt_out = tt_model(attention_input)
 
     # Doing contract in tt is correct!!
-    tt_output_torch = ttnn.to_torch(tt_out, device=mesh_device)[0, :, :, :]
+    tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[0, :, :, :]
+    # tt_output_torch = ttnn.to_torch(tt_out, device=mesh_device)
 
     reference_output = reference_model(pt_attention_input)[0]
 

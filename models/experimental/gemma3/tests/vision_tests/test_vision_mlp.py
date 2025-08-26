@@ -32,7 +32,19 @@ from models.tt_transformers.tt.ccl import TT_CCL
     ],
     indirect=True,
 )
-def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds):
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 30000000,
+            "num_command_queues": 1,
+            "l1_small_size": 24576,
+        }
+    ],
+    indirect=True,
+)
+def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds, device_params):
     dtype = ttnn.bfloat16
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()

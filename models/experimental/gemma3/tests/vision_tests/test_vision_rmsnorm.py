@@ -7,9 +7,9 @@ import pytest
 import os
 
 import ttnn
-from models.experimental.gemma3.tt.rmsnorm import RMSNorm
+from models.experimental.gemma3.tt.gemma_vision_rmsnorm import RMSNorm
 
-from models.tt_transformers.tt.distributed_norm import DistributedNorm
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
@@ -22,7 +22,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("mesh_device"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -35,7 +35,19 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "batch_size",
     (1,),
 )
-def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, mesh_device):
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 30000000,
+            "num_command_queues": 1,
+            "l1_small_size": 24576,
+        }
+    ],
+    indirect=True,
+)
+def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, mesh_device, device_params):
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -57,7 +69,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, mesh_device):
 
     # reference_model.load_state_dict(partial_state_dict)
 
-    tt_inner_norm = RMSNorm(
+    tt_model = RMSNorm(
         device=mesh_device,
         dim=1152,
         state_dict=state_dict,
@@ -69,8 +81,9 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, mesh_device):
         sharded_output_config=tt_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
     )
 
+    tt_ccl = TT_CCL(mesh_device)
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, tt_model_args, TG=tt_model_args.is_galaxy)
+    # tt_model = DistributedNorm(tt_inner_norm, tt_model_args, TG=tt_model_args.is_galaxy, tt_ccl = tt_ccl)
 
     input = torch.rand(1, 1, 1152)
 
@@ -82,7 +95,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, mesh_device):
         device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=(
             tt_model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         ),
@@ -97,7 +110,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, mesh_device):
             mesh_device, dims=(0, 2) if tt_model_args.is_galaxy else (2, 0), mesh_shape=tt_model_args.cluster_shape
         ),
     )[:1, :, :]
-    tt_output_torch = tt_output_torch.view(1, 1, 1152)
+    tt_output_torch = tt_output_torch[..., :1152].squeeze(0)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
     non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
     tt_output_torch = tt_output_torch[non_zero_indices]

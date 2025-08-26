@@ -84,8 +84,6 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, mesh_device):
     )
     tt_output = tt_model(tt_input)
 
-    print("tt_output ", tt_output.shape)
-
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, :, :, : tt_output.shape[-1]
     ]

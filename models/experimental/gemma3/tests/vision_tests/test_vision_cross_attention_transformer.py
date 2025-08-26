@@ -19,7 +19,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+# @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -30,10 +30,23 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     indirect=True,
 )
 @pytest.mark.parametrize("bsz", [1])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 30000000,
+            "num_command_queues": 1,
+            "l1_small_size": 24576,
+        }
+    ],
+    indirect=True,
+)
 def test_gemma_vision(
     mesh_device,
     reset_seeds,
     bsz,
+    device_params,
 ):
     pcc_required = 0.90
     dtype = ttnn.bfloat16
@@ -103,8 +116,11 @@ def test_gemma_vision(
 
     logger.info("Checking outputs")
     out = ttnn.from_device(test_output)
-    tt_output_torch = ttnn.to_torch(out)
-    tt_output_torch = tt_output_torch.view(1, 256, 2560)
+    tt_output_torch = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)).squeeze(0)[
+        ..., : model_args.dim
+    ]
+
+    # tt_output_torch = tt_output_torch.view(1, 256, 2560)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
