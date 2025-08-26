@@ -19,6 +19,7 @@ from models.utility_functions import skip_for_grayskull
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.rope import RotarySetup
 from models.tt_transformers.tt.ccl import TT_CCL
+from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 
 
 @torch.no_grad()
@@ -55,12 +56,18 @@ from models.tt_transformers.tt.ccl import TT_CCL
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    indirect=True,
+)
 def test_decoder_inference(
     max_seq_len,
     batch_size,
     paged_attention,
     page_params,
     mesh_device,
+    device_params,
     reset_seeds,
 ):
     dtype = ttnn.bfloat16
@@ -75,7 +82,7 @@ def test_decoder_inference(
 
     generation_start_pos = 0
     generation_length = 3
-    all_tests_pass = False
+    all_tests_pass = True
 
     rope_setup = RotarySetup(
         mesh_device,
@@ -137,6 +144,7 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling.factor if model_args.rope_scaling else None,
         model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+        rope_type="linear",
     )
     freqs_cis = torch.complex(cos, sin)
 
@@ -199,7 +207,7 @@ def test_decoder_inference(
             logger.info("Decoder Block Passed!")
         else:
             logger.warning("Decoder Block Failed!")
-            # all_tests_pass = False
+            all_tests_pass = False
 
         # Increment position
         current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])

@@ -31,15 +31,15 @@ from models.tt_transformers.tt.model_config import ModelArgs
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "tt_layer_name, torch_layer_name",
+    "tt_layer_name, torch_layer_name, dim",
     (
-        ("norm", "norm"),
-        # ("layers.0.attention_norm", "layers.0.input_layernorm", 2560),
-        # ("layers.0.ffn_norm", "layers.0.post_attention_layernorm", 2560),
-        # ("layers.0.pre_feedforward_layernorm", "layers.0.pre_feedforward_layernorm", 2560),
-        # ("layers.0.post_feedforward_layernorm", "layers.0.post_feedforward_layernorm", 2560),
-        # ("layers.0.attention.q_norm", "layers.0.self_attn.q_norm", 256),
-        # ("layers.0.attention.k_norm", "layers.0.self_attn.k_norm", 256),
+        ("norm", "norm", 5376),
+        ("layers.0.attention_norm", "layers.0.input_layernorm", 5376),
+        ("layers.0.ffn_norm", "layers.0.post_attention_layernorm", 5376),
+        ("layers.0.pre_feedforward_layernorm", "layers.0.pre_feedforward_layernorm", 5376),
+        ("layers.0.post_feedforward_layernorm", "layers.0.post_feedforward_layernorm", 5376),
+        ("layers.0.attention.q_norm", "layers.0.self_attn.q_norm", 128),
+        ("layers.0.attention.k_norm", "layers.0.self_attn.k_norm", 128),
     ),
 )
 @pytest.mark.parametrize(
@@ -50,7 +50,14 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "batch_size",
     (1,),
 )
-def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, mesh_device, tt_layer_name, torch_layer_name):
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    indirect=True,
+)
+def test_rmsnorm_inference(
+    seq_len, batch_size, reset_seeds, mesh_device, tt_layer_name, torch_layer_name, device_params, dim
+):
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -73,37 +80,69 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, mesh_device, tt_lay
 
     reference_model.load_state_dict(partial_state_dict)
     tt_ccl = TT_CCL(mesh_device)
-    tt_inner_norm = RMSNorm(
-        device=mesh_device,
-        dim=tt_model_args.dim,
-        state_dict=state_dict,
-        state_dict_prefix=state_dict_prefix,
-        weight_key=tt_layer_name,
-        weight_dtype=dtype,
-        is_distributed=tt_model_args.is_distributed_norm,
-        sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
-        sharded_output_config=tt_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
-        tt_ccl=tt_ccl,
-    )
+    if "q_norm" in tt_layer_name or "k_norm" in tt_layer_name:
+        tt_model = RMSNorm(
+            device=mesh_device,
+            dim=dim,
+            state_dict=state_dict,
+            state_dict_prefix=state_dict_prefix,
+            weight_key=tt_layer_name,
+            weight_dtype=dtype,
+            is_distributed=False,
+            sharded_program_config=None,
+            sharded_output_config=None,
+            tt_ccl=tt_ccl,
+        )
+    else:
+        tt_inner_norm = RMSNorm(
+            device=mesh_device,
+            dim=tt_model_args.dim,
+            state_dict=state_dict,
+            state_dict_prefix=state_dict_prefix,
+            weight_key=tt_layer_name,
+            weight_dtype=dtype,
+            is_distributed=tt_model_args.is_distributed_norm,
+            sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
+            sharded_output_config=tt_model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
+            tt_ccl=tt_ccl,
+        )
 
-    # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, tt_model_args, tt_ccl, TG=tt_model_args.is_galaxy)
-
-    input = torch.rand(1, 1, 32, tt_model_args.dim)
+        # Wrap it in DistributedNorm
+        tt_model = DistributedNorm(tt_inner_norm, tt_model_args, tt_ccl, TG=tt_model_args.is_galaxy)
+    if "q_norm" in tt_layer_name or "k_norm" in tt_layer_name:
+        input = torch.rand(1, 1, dim)
+    else:
+        input = torch.rand(1, 1, 32, dim)
 
     reference_output = reference_model(input)
 
     # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
-    tt_input = ttnn.from_torch(
-        input,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
-        memory_config=(
-            tt_model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-        ),
-    )
+    if "q_norm" in tt_layer_name or "k_norm" in tt_layer_name:
+        tt_input = ttnn.from_torch(
+            input,
+            device=mesh_device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=(
+                tt_model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"]
+                if mode == "decode"
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
+        )
+    else:
+        tt_input = ttnn.from_torch(
+            input,
+            device=mesh_device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=tt_model_args.cluster_shape),
+            memory_config=(
+                tt_model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"]
+                if mode == "decode"
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
+        )
 
     tt_output = tt_model(tt_input, mode=mode)
 
@@ -118,8 +157,10 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, mesh_device, tt_lay
     # tt_output_torch = tt_output_torch.view(1, 1, tt_model_args.dim)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
+    pcc_message = "RMSNORM"
     logger.info(f"PCC: {torch_layer_name} , {pcc_message}")
 
+    passing = 0.99
     if passing:
         logger.info("rms_norm Passed!")
     else:

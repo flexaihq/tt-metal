@@ -33,7 +33,12 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "batch_size",
     (1,),
 )
-def test_mlp_inference(seq_len, batch_size, reset_seeds, mesh_device):
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    indirect=True,
+)
+def test_mlp_inference(seq_len, batch_size, reset_seeds, mesh_device, device_params):
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 

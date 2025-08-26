@@ -90,11 +90,11 @@ def test_layernorm_inference(mesh_device, reset_seeds, layer_name):
     pcc_required = 0.99
     for idx, tt_output_torch in enumerate(tt_outputs):
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
-
+        reference_output_comp = reference_output.clone()
         non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
         tt_output_torch = tt_output_torch[non_zero_indices]
-        reference_output = reference_output[non_zero_indices]
+        reference_output_comp = reference_output_comp[non_zero_indices]
 
-        logger.info(comp_allclose(reference_output, tt_output_torch))
+        logger.info(comp_allclose(reference_output_comp, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
         assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

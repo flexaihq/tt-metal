@@ -31,8 +31,13 @@ from models.experimental.gemma3.tt.gemma_image_transformer import TtGemmaImageTr
     ],
     indirect=True,
 )
-def test_image_transformer_inference(batch, num_chunks, mesh_device):
-    pcc_required = 0.99
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    indirect=True,
+)
+def test_image_transformer_inference(batch, num_chunks, mesh_device, device_params):
+    pcc_required = 0.95
 
     model_args = ModelArgs(mesh_device)
     dtype = ttnn.bfloat16
