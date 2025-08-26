@@ -42,7 +42,7 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds):
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
-    tokenizer = model_args.tokenizer
+    tokenizer = model_args.processor
     reference_emb = model_args.reference_embedding()
     layer_name = "tok_embeddings.weight"
     reference_emb.load_state_dict({"emb.weight": state_dict[layer_name]})

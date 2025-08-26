@@ -84,7 +84,7 @@ def setup_vision_prompts_and_tokenizer(model_args, instruct):
         }
     ]
 
-    tokenizer = model_args.tokenizer
+    tokenizer = model_args.processor
     return messages, tokenizer
 
 
@@ -147,7 +147,7 @@ def generate(model, processed_inputs, model_args, page_table=None, paged_attenti
     logger.info("Running generation...")
 
     # Create Generator (exactly like test_end2end.py)
-    generator = Generator([model], [model_args], model.mesh_device, tokenizer=model_args.tokenizer)
+    generator = Generator([model], [model_args], model.mesh_device, tokenizer=model_args.processor)
 
     # Setup KV cache (exactly like test_end2end.py)
     tt_kv_cache = [[l.attention.layer_past for l in model.layers]] if paged_attention_config else None
@@ -163,7 +163,7 @@ def generate(model, processed_inputs, model_args, page_table=None, paged_attenti
         prefill_lens,
     ) = preprocess_inputs_prefill(
         [input_prompts],
-        model_args.tokenizer,
+        model_args.processor,
         [model_args],
         instruct=True,
         max_generated_tokens=max_gen_len,
@@ -217,7 +217,7 @@ def generate(model, processed_inputs, model_args, page_table=None, paged_attenti
         )
 
         token_id = out_tok[0].item()
-        decoded_token = model_args.tokenizer.decode([token_id])
+        decoded_token = model_args.processor.decode([token_id])
         logger.info(f"Generated token {iteration}: ID={token_id}, text='{decoded_token}'")
 
         # Create result object
@@ -234,7 +234,7 @@ def generate(model, processed_inputs, model_args, page_table=None, paged_attenti
             break
 
     # Final response (exactly like test_end2end.py)
-    response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
+    response = model_args.processor.decode(all_outputs[0], skip_special_tokens=True)
     logger.info(f"📝 Final Generated Response:\n{response}")
     logger.info(f"📝 Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
     chat = parse_chat_output(response)
