@@ -574,6 +574,7 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
+                "gemma-3-1b": {"N150": 128, "N300": None, "T3K": None, "TG": None, "P150x4": None},
                 "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": 128},
                 "gemma-3-27b": {"N150": None, "N300": None, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -611,7 +612,7 @@ class ModelArgs:
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
         if (
-            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-4b"]
+            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-4b", "gemma-3-1b"]
             and self.device_name == "N150"
         ) or (self.base_model_name in ["Qwen2.5-7B", "gemma-3-4b"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
@@ -1512,7 +1513,6 @@ class ModelArgs:
         # they are calculated in HF but not calculated in Meta
         self.n_layers -= len(text_config.get("cross_attention_layers", ()))
 
-
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
@@ -1630,7 +1630,7 @@ class ModelArgs:
         """
         Returns the number of tokens per chunk, accounting for the extra class token
         """
-        return (self.vision_chunk_size // self.vision_patch_size) ** 2 + 1
+        return (self.image_size // self.vision_patch_size) ** 2 + 1
 
     def _set_model_params(self, checkpoint_dir):
         if self.checkpoint_type == CheckpointType.Meta:
