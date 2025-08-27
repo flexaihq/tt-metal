@@ -52,12 +52,12 @@ def test_gemma_vision(
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
 
-    first_layer_prefix = "model.vision_tower.vision_model."
+    first_layer_prefix = "visual."
     # partial_state_dict = {
     #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     # }
 
-    image_size = model_args.vision_chunk_size
+    image_size = model_args.image_size
     in_channels = model_args.vision_in_channels
 
     input_tensor = torch.rand((bsz, in_channels, image_size, image_size))

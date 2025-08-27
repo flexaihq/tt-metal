@@ -25,7 +25,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("mesh_device"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -33,13 +33,13 @@ from models.tt_transformers.tt.model_config import ModelArgs
 @pytest.mark.parametrize(
     "tt_layer_name, torch_layer_name, dim",
     (
-        ("norm", "norm", 5376),
-        ("layers.0.attention_norm", "layers.0.input_layernorm", 5376),
-        ("layers.0.ffn_norm", "layers.0.post_attention_layernorm", 5376),
-        ("layers.0.pre_feedforward_layernorm", "layers.0.pre_feedforward_layernorm", 5376),
-        ("layers.0.post_feedforward_layernorm", "layers.0.post_feedforward_layernorm", 5376),
-        ("layers.0.attention.q_norm", "layers.0.self_attn.q_norm", 128),
-        ("layers.0.attention.k_norm", "layers.0.self_attn.k_norm", 128),
+        ("norm", "norm", 1152),
+        ("layers.0.attention_norm", "layers.0.input_layernorm", 1152),
+        ("layers.0.ffn_norm", "layers.0.post_attention_layernorm", 1152),
+        ("layers.0.pre_feedforward_layernorm", "layers.0.pre_feedforward_layernorm", 1152),
+        ("layers.0.post_feedforward_layernorm", "layers.0.post_feedforward_layernorm", 1152),
+        ("layers.0.attention.q_norm", "layers.0.self_attn.q_norm", 256),
+        ("layers.0.attention.k_norm", "layers.0.self_attn.k_norm", 256),
     ),
 )
 @pytest.mark.parametrize(

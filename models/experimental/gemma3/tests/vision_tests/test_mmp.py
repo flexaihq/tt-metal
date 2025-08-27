@@ -24,7 +24,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("mesh_device"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -72,8 +72,8 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, mesh_device):
     tt_model = TtGemma3MultiModalProjector(
         mesh_device=mesh_device,
         state_dict=state_dict,
-        state_dict_prefix="model.multi_modal_projector",
-        image_size=tt_model_args.vision_chunk_size,
+        state_dict_prefix="multi_modal_projector",
+        image_size=tt_model_args.image_size,
         patch_size=tt_model_args.vision_patch_size,
         hidden_size=tt_model_args.vision_hidden_dim,
         mm_tokens_per_image=tt_model_args.mm_tokens_per_image,

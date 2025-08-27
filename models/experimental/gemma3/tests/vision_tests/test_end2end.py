@@ -26,7 +26,7 @@ from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 from models.tt_transformers.tt.model_config import HfModelWrapper
 
 from models.tt_transformers.tt.model_config import ModelArgs
-from transformers import AutoProcessor
+from transformers import AutoProcessor, AutoTokenizer
 
 import re
 
@@ -189,15 +189,21 @@ def setup_vision_reference_model(model_args, run_ref_pt):
 def process_real_vision_inputs(messages, model_args):
     """Process real image inputs using AutoProcessor (Interface Segregation)."""
     model_id = model_args.CKPT_DIR
-    processor = AutoProcessor.from_pretrained(model_id)
+
+    try:
+        # Try loading processor (works for models that has preprocessor_config.json)
+        processor = AutoProcessor.from_pretrained(model_id)
+    except OSError:
+        # Fallback to tokenizer
+        processor = AutoTokenizer.from_pretrained(model_id)
 
     # Process the multimodal messages similar to test_end2end.py
     encoded = processor.apply_chat_template(
         messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
-    ).to(dtype=torch.bfloat16)
+    ).to(torch.bfloat16)
 
     input_ids = encoded["input_ids"]
-    pixel_values = encoded["pixel_values"]
+    pixel_values = encoded["pixel_values"] if "pixel_values" in encoded else None
     attention_mask = encoded["attention_mask"]
 
     # logger.info(f"Processed vision inputs - input_ids: {input_ids.shape}, pixel_values: {pixel_values.shape}")
@@ -228,15 +234,17 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
         )
 
     # Load vision model (exactly like test_end2end.py)
-    vision_model = TtGemmaTransformerVision(
-        mesh_device=mesh_device,
-        state_dict=state_dict,
-        state_dict_prefix=vision_prefix,
-        dtype=dtype,
-        configuration=model_args,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-    )
-
+    if model_args.is_multimodal:
+        vision_model = TtGemmaTransformerVision(
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            state_dict_prefix=vision_prefix,
+            dtype=dtype,
+            configuration=model_args,
+            weight_cache_path=model_args.weight_cache_path(dtype),
+        )
+    else:
+        vision_model = None
     # Load text model (exactly like test_end2end.py)
     text_model = Gemma3Transformer(
         args=model_args,
@@ -258,6 +266,7 @@ def run_generation_exactly_like_test_end2end(
     input_ids = processed_inputs["input_ids"]
     pixel_values = processed_inputs["pixel_values"]
     input_prompts = processed_inputs["input_prompts"]
+    processor = processed_inputs["processor"]
 
     logger.info("Running generation exactly like test_end2end.py...")
 
@@ -265,7 +274,7 @@ def run_generation_exactly_like_test_end2end(
     logger.info("Running Vision Model...")
 
     # Create Generator (exactly like test_end2end.py)
-    generator = Gemma3Generator([text_model], [model_args], vision_model.mesh_device, tokenizer=model_args.tokenizer)
+    generator = Gemma3Generator([text_model], [model_args], text_model.mesh_device, tokenizer=model_args.tokenizer)
 
     # Setup KV cache (exactly like test_end2end.py)
     tt_kv_cache = [[l.attention.layer_past for l in text_model.layers]] if paged_attention_config else None
@@ -277,6 +286,7 @@ def run_generation_exactly_like_test_end2end(
     input_tokens_prefill = input_ids
     batch_size = input_tokens_prefill.shape[0]
     # seq_len = input_tokens_prefill.shape[1]
+    model_args.tokenizer = processor
 
     (
         input_tokens_prefill_pt,

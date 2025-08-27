@@ -40,14 +40,14 @@ def test_conv2d_inference(
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    tt_layer_prefix = "model.vision_tower.vision_model.embeddings.patch_embedding."
-    first_layer_prefix = "model.vision_tower.vision_model.embeddings.patch_embedding._linear."
+    tt_layer_prefix = "visual.embeddings.patch_embedding."
+    first_layer_prefix = "visual.embeddings.patch_embedding._linear."
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
     num_devices = model_args.num_devices
 
-    B, NCH, H, W = (1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size)
+    B, NCH, H, W = (1, 3, model_args.image_size, model_args.image_size)
     in_channels, out_channels, kernel_size, stride, bias = (
         3,
         model_args.vision_dim,

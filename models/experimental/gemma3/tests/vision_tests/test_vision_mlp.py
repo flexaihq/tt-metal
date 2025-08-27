@@ -50,10 +50,11 @@ def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds, device_param
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("MLP", 0, is_vision=True)
+    # first_layer_prefix = model_args.get_state_dict_prefix("MLP", 0, is_vision=True)
     # partial_state_dict = {
     #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     # }
+    first_layer_prefix = "visual.encoder.layers.0.mlp."
     model_args.WEIGHTS_DTYPE = dtype
 
     dim = model_args.vision_dim
