@@ -234,7 +234,10 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
             chat.append({"role": "user", "content": prompt_text})
         return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
     else:
-        return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+        output = tokenizer.apply_chat_template([prompt_text], add_generation_prompt=True, tokenize=True)
+        if len(output) == 1:
+            output = output[0]
+        return output
 
 
 def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
@@ -262,7 +265,7 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def apply_llama3_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
     # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
     # Values obtained from grid search
     low_freq_factor = 1
@@ -316,7 +319,7 @@ def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, 
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
     if scale_factor is not None:
-        freqs = apply_llama3_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type=rope_type)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
