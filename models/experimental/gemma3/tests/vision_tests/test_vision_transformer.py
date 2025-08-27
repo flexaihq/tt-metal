@@ -46,7 +46,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, device_para
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     n_layers = model_args.vision_n_layers
-    first_layer_prefix = "model.vision_tower.vision_model.encoder."
+    first_layer_prefix = "visual.encoder."
 
     # gated = True
 

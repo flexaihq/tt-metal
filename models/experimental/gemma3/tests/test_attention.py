@@ -1,4 +1,4 @@
-"""Gemma-3-4b-it Test for Text Attention"""
+"""Gemma-3 Test for Text Attention"""
 
 
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.

@@ -64,38 +64,13 @@ def test_gemma_vision(
     # reference_vision_model.load_state_dict(vision_partial_state_dict)
 
     mmp_first_layer_prefix = "multi_modal_projector."
-    # mmp_partial_state_dict = {
-    #     k[len(mmp_first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(mmp_first_layer_prefix))
-    # }
 
-    image_size = model_args.vision_chunk_size
+    image_size = model_args.image_size
     in_channels = model_args.vision_in_channels
-
-    # model_id = "google/gemma-3-4b-it"
-    # processor = AutoProcessor.from_pretrained(model_id)
-    # messages = [
-    #     {
-    #         "role": "user",
-    #         "content": [
-    #             {
-    #                 "type": "image",
-    #                 "image": "https://www.talkesport.com/wp-content/uploads/eentity-1024x574.jpg",
-    #             },
-    #             {"type": "text", "text": "Describe this?"},
-    #         ],
-    #     }
-    # ]
-
-    # inputs = processor.apply_chat_template(
-    #     messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
-    # ).to(dtype=torch.bfloat16)
-
-    # input_tensor = inputs["pixel_values"]
 
     input_tensor = torch.rand((bsz, in_channels, image_size, image_size))
 
     reference_mmp = model_args.reference_vision_multi_modal()
-    # reference_mmp.load_state_dict(mmp_partial_state_dict)
 
     reference_output = get_image_features(
         reference_vision_model,
