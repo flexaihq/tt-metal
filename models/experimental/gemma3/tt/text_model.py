@@ -181,24 +181,26 @@ class Gemma3Transformer(LightweightModule):
             tokens_embd = self.embd(tokens)
         else:
             S = tokens.shape[-1]
-            tokens_embd = self.host_embed(tokens)
 
             tokens_embd = ttnn.from_torch(
-                tokens_embd,
+                tokens.reshape(1, 1, 1, -1),
                 device=self.mesh_device,
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
+
+            tokens_embd = self.embd(tokens_embd)
 
             pixel_values = kwargs["processed_inputs"]["pixel_values"]
             input_ids = kwargs["processed_inputs"]["input_ids"]
             if pixel_values is not None:
                 vision_model = kwargs["vision_model"]
                 vision_output = vision_model(pixel_values)
+
                 tokens_embd = ttnn.to_torch(
                     tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
-                )[:, :, : tokens_embd.shape[-1]]
+                )
 
                 comp_vision_output = ttnn.to_torch(
                     vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
@@ -215,13 +217,14 @@ class Gemma3Transformer(LightweightModule):
                 special_image_mask = special_image_mask.expand_as(tokens_embd)
                 image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
                 tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
+
                 tokens_embd = ttnn.from_torch(
                     tokens_embd,
                     dtype=ttnn.bfloat16,
                     device=self.mesh_device,
                     layout=ttnn.TILE_LAYOUT,
                     mesh_mapper=ttnn.ShardTensor2dMesh(
-                        self.mesh_device, dims=(None, 2), mesh_shape=list(self.mesh_device.shape)
+                        self.mesh_device, dims=(None, -1), mesh_shape=list(self.mesh_device.shape)
                     ),
                 )
 
