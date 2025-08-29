@@ -955,7 +955,15 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
+    supported_models = [
+        "Llama-3.2-1B",
+        "Llama-3.2-3B",
+        "Llama-3.1-8B",
+        "Llama-3.2-11B",
+        "Llama-3.1-70B",
+        "Mistral-7B",
+        "Mistral-Small-3.1-24B",
+    ]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "T3K", "TG"]
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
@@ -1004,6 +1012,7 @@ def test_demo_text(
             "N300_Mistral-7B": 38,  # TODO Update target
             "T3K_Mistral-7B": 45,  # TODO Update target
             "TG_Mistral-7B": 45,  # TODO Update target
+            "T3K_Mistral-Small-3.1-24B": 33,  # TODO Update target
         }
         if model_device_key in dict_target_decode_tok_s_u:
             target_decode_tok_s_u = dict_target_decode_tok_s_u[model_device_key]
@@ -1099,6 +1108,7 @@ def test_demo_text(
                 # "T3K_Qwen2.5-72B": 13, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
                 "T3K_Qwen2.5-Coder-32B": 21,
                 # "T3K_Qwen3-32B": 20, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24303)
+                "T3K_Mistral-Small-3.1-24B": 33,  # TODO Update target
             }
 
             # Only call verify_perf if the model_device_key exists in the targets
