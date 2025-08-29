@@ -12,10 +12,8 @@ pass the resulting visual tokens to the text model along with text tokens.
 
 
 import ttnn
-import torch
-
 from models.tt_transformers.tt.model import Transformer
-from ttnn import ConcatMeshToTensor
+from models.tt_transformers.tt.multimodal.mistral_24b.vision_model import TtMistralVisionTransformer
 
 
 class MistralTransformer(Transformer):
@@ -39,17 +37,25 @@ class MistralTransformer(Transformer):
             use_paged_kv_cache=use_paged_kv_cache,
         )
 
-    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
+        self.vision_model = TtMistralVisionTransformer(
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            state_dict_prefix="vision_tower.",
+            dtype=dtype,
+            model_args=args,
+            tt_ccl=self.tt_ccl,
+        )
+
+    def prepare_inputs_prefill(self, pt_tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
         TODO: Debate whether this function is responsible for padding
         """
 
-        tokens = tokens.reshape(1, 1, 1, -1)
-        S = tokens.shape[-1]
+        S = pt_tokens.shape[-1]
         tokens = ttnn.from_torch(
-            tokens,
+            pt_tokens.reshape(1, 1, 1, -1),
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -57,37 +63,22 @@ class MistralTransformer(Transformer):
         )
         tokens_embd = self.embd(tokens)
 
-        pixel_values = kwargs["processed_inputs"]["pixel_values"]
-        input_ids = kwargs["processed_inputs"]["input_ids"]
-        image_sizes = kwargs["processed_inputs"]["image_sizes"]
+        vision_output = self.compute_vision_token(**kwargs)
 
-        if pixel_values is not None:
-            vision_model = kwargs["vision_model"]
-            vision_output = vision_model(pixel_values, image_sizes)
-            vision_output_torch = ttnn.to_torch(
-                vision_output, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1)
-            )[:, : vision_output.shape[-1]]
-            tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1))
-            sliced_token_embds = tokens_embd[: tokens_embd.shape[0]]
+        if vision_output is not None:
+            tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+            comp_vision_output = ttnn.to_torch(
+                vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            )[: vision_output.shape[0], :]
 
-            image_features = vision_output_torch
-
-            input_ids = torch.nn.functional.pad(
-                input_ids, (0, tokens_embd.shape[1] - input_ids.shape[1]), "constant", 0
-            )
-            special_image_mask = (input_ids == 10).unsqueeze(-1)
+            image_features = comp_vision_output.squeeze(0)
+            special_image_mask = (pt_tokens == 10).unsqueeze(-1)
             special_image_mask = special_image_mask.expand_as(tokens_embd)
             image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
             tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
 
-            tokens_embd = ttnn.from_torch(
+            tokens_embd = self.args.prepare_residual_tensor_prefill(
                 tokens_embd,
-                dtype=ttnn.bfloat16,
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, dims=(None, 2), mesh_shape=list(self.mesh_device.shape)
-                ),
             )
 
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
@@ -132,3 +123,9 @@ class MistralTransformer(Transformer):
             tt_chunk_page_table = None
 
         return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
+
+    def compute_vision_token(self, pixel_values, image_sizes):
+        if pixel_values is not None:
+            vision_output = self.vision_model(pixel_values, image_sizes)
+            return vision_output
+        return None

@@ -6,6 +6,7 @@ This file is a unit test for validating the Mistral-24B Vision Model pipeline.
 """
 
 import os
+
 import pytest
 import torch
 from loguru import logger
@@ -13,7 +14,7 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
+from models.tt_transformers.tt.multimodal.mistral_24b.vision_model import TtMistralVisionTransformer
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -82,7 +83,7 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
         model_args=model_args,
     )
 
-    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
+    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])  # [0]
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, : tt_output.shape[-1]
     ]
