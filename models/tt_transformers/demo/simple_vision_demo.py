@@ -208,6 +208,9 @@ def test_multimodal_demo_text(
     logger.info("Start profiler")
     profiler = BenchmarkProfiler()
     profiler.start("run")
+    assert not (
+        max_batch_size == 32 and os.environ.get("MESH_DEVICE") == "N150"
+    ), "Run models with batch size of 1 when MESH_DEVICE is N150"
 
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
@@ -302,7 +305,7 @@ def test_multimodal_demo_text(
     prompt_encoder = hf_multimodal_encode if HF_MODEL else formatter.encode_dialog_prompt
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
-        current_dialogs = dialogs
+        current_dialogs = trace_dialogs + dialogs
         for batch_idx in range(num_batches):
             batch_dialogs = current_dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
             for dialog in batch_dialogs:

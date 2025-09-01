@@ -1797,7 +1797,10 @@ class ModelArgs:
         return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        text_prefix = self.state_dict_text_prefix
+        if "gemma-3" in self.model_name:
+            text_prefix = ""
+        else:
+            text_prefix = self.state_dict_text_prefix
         vision_prefix = self.state_dict_vision_prefix
 
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
@@ -2576,7 +2579,7 @@ class ModelArgs:
                 model = self.reference_transformer(wrap=False)
                 layer = model.model.embed_tokens
             else:
-                layer = reference_model.model.embed_tokens
+                layer = reference_model.model.model.embed_tokens
 
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))

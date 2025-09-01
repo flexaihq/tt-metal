@@ -9,11 +9,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.decoder import TransformerBlock
-from models.tt_transformers.tt.model_config import CheckpointType, ModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
 
 
@@ -148,17 +147,15 @@ def test_decoder_inference(
 
     seqlen = 1
 
-    if model_args.checkpoint_type == CheckpointType.Meta:
-        cos, sin = precompute_freqs(
-            model_args.head_dim,
-            model_args.max_seq_len * 2,
-            model_args.rope_theta,
-            model_args.rope_scaling.factor if model_args.rope_scaling else None,
-            model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
-        )
-        freqs_cis = torch.complex(cos, sin)
-    else:
-        freqs_cis = None
+    cos, sin = precompute_freqs(
+        model_args.head_dim,
+        model_args.max_seq_len * 2,
+        model_args.rope_theta,
+        model_args.rope_scaling.factor if model_args.rope_scaling else None,
+        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+        rope_type="linear",
+    )
+    freqs_cis = torch.complex(cos, sin)
 
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
@@ -178,10 +175,13 @@ def test_decoder_inference(
         # input = torch.randn(1, 32, 4096)
         pt_decode_input = (
             torch.rand(
-                batch_size, seqlen, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+                batch_size,
+                seqlen,
+                model_args.dim,
             )
             * 2
         ) - 1
+        pt_decode_input = pt_decode_input.to(torch.bfloat16)
         tt_decode_input = pt_decode_input.clone()
 
         decode_input = model_args.prepare_residual_tensor_decode(

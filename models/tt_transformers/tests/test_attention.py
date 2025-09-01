@@ -143,6 +143,7 @@ def test_attention_inference(
         model_args.rope_theta,
         model_args.rope_scaling.factor if model_args.rope_scaling else None,
         model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+        rope_type=model_args.rope_scaling.rope_type.value,
     )
     freqs_cis = torch.complex(cos, sin)
 
@@ -163,6 +164,8 @@ def test_attention_inference(
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
         pt_attention_input = torch.randn(
             batch_size, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+        ).to(
+            torch.bfloat16
         )  # Qwen2.5 0.5B sees 0.1 to 2.1
 
         tt_attention_input = pt_attention_input.clone()

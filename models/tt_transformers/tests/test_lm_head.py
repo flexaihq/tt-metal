@@ -64,7 +64,7 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
         max_columns_per_device=model_args.max_columns_per_device_lm_head,
     )
 
-    torch_input = torch.randn(1, 1, seq_len, model_args.dim)
+    torch_input = torch.randn(1, 1, seq_len, model_args.dim).to(torch.bfloat16)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,

@@ -270,7 +270,7 @@ class TransformerBlock(LightweightModule):
         if mode == "prefill":
             x.deallocate(True)
 
-        ttnn.deallocate(attn_out)
+        # ttnn.deallocate(attn_out)
 
         if TG and mode == "decode":
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
