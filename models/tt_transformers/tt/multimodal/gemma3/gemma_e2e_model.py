@@ -27,7 +27,7 @@ class TtGemmaModel(Transformer):
         self.vision_model = TtGemmaTransformerVision(
             mesh_device=mesh_device,
             state_dict=state_dict,
-            state_dict_prefix="model.vision_tower.vision_model.",
+            state_dict_prefix=args.state_dict_vision_prefix,
             dtype=dtype,
             configuration=args,
             weight_cache_path=weight_cache_path,
