@@ -66,7 +66,7 @@ def test_decoder_inference(
             "Mistral-7B models do not support max_seq_len > 256. See issue: https://github.com/tenstorrent/tt-metal/issues/19806"
         )
 
-    dtype = ttnn.bfloat8_b
+    dtype = ttnn.bfloat16
     batch_size = 1  # For prefill we only support batch_size = 1
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
@@ -155,6 +155,7 @@ def test_decoder_inference(
             )
             * 2
         ) - 1
+        pt_decode_input = pt_decode_input.to(torch.bfloat16)
         tt_decode_input = pt_decode_input.clone()
         decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
@@ -173,7 +174,13 @@ def test_decoder_inference(
         ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
         # Run TT model
         tt_out = tt_model(
-            decode_input, None, rot_mats_global=rot_mats, user_id=0, mode="prefill", page_table=page_table_tt
+            decode_input,
+            None,
+            rot_mats_global=rot_mats,
+            rot_mats_local=rot_mats,
+            user_id=0,
+            mode="prefill",
+            page_table=page_table_tt,
         )
         tt_out = ttnn.to_torch(
             tt_out,

@@ -1611,7 +1611,7 @@ class ModelArgs:
         vision_config = config.get("vision_config", config)
 
         self.vision_chunk_size = vision_config.get("vision_chunk_size", -1)
-        self.image_size = vision_config.get("image_size", 896)
+        self.image_size = vision_config.get("image_size", -1)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
         self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", -1)
         self.vision_dim = vision_config.get("hidden_size", 1280)
@@ -1685,10 +1685,13 @@ class ModelArgs:
 
     # TODO: Rename to is_llama_vision
     def is_vision(self):
-        return self.vision_chunk_size > 0
+        return self.image_size > 0
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        text_prefix = self.state_dict_text_prefix
+        if "gemma-3" in self.model_name:
+            text_prefix = ""
+        else:
+            text_prefix = self.state_dict_text_prefix
         vision_prefix = self.state_dict_vision_prefix
 
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
@@ -2311,17 +2314,12 @@ class ModelArgs:
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
-                if "gemma-3" in self.model_name:
-                    from transformers import Gemma3ForConditionalGeneration
-
-                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
+                if self.cached_hf_model is None:
+                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    self.cached_hf_model = model
                 else:
-                    if self.cached_hf_model is None:
-                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                        self.cached_hf_model = model
-                    else:
-                        model = self.cached_hf_model
-                    model.model.layers = model.model.layers[: self.n_layers]
+                    model = self.cached_hf_model
+                model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
                 return wrapper
@@ -2425,7 +2423,7 @@ class ModelArgs:
                 model = self.reference_transformer(wrap=False)
                 layer = model.model.embed_tokens
             else:
-                layer = reference_model.model.embed_tokens
+                layer = reference_model.model.model.embed_tokens
 
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))

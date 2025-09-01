@@ -8,7 +8,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.decoder import TransformerBlock
@@ -141,6 +140,7 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling.factor if model_args.rope_scaling else None,
         model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+        rope_type="linear",
     )
     freqs_cis = torch.complex(cos, sin)
 
@@ -162,10 +162,13 @@ def test_decoder_inference(
         # input = torch.randn(1, 32, 4096)
         pt_decode_input = (
             torch.rand(
-                batch_size, seqlen, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+                batch_size,
+                seqlen,
+                model_args.dim,
             )
             * 2
         ) - 1
+        pt_decode_input = pt_decode_input.to(torch.bfloat16)
         tt_decode_input = pt_decode_input.clone()
 
         decode_input = model_args.prepare_residual_tensor_decode(
@@ -182,6 +185,7 @@ def test_decoder_inference(
             decode_input,
             current_pos_tensor,
             rot_mats_global=rot_mats,
+            rot_mats_local=rot_mats,
             mode="decode",
             page_table=page_table_tt,
         )
@@ -209,7 +213,7 @@ def test_decoder_inference(
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,

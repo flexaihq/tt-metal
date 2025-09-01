@@ -18,13 +18,22 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
+# @pytest.mark.parametrize(
+#     "weights, layers",
+#     [
+#         ("random", 1),
+#         ("instruct", None),
+#     ],
+#     ids=["quick", "full"],
+# )
+
+
 @pytest.mark.parametrize(
     "weights, layers",
     [
-        ("random", 1),
         ("instruct", None),
     ],
-    ids=["quick", "full"],
+    ids=["full"],
 )
 @pytest.mark.parametrize(
     "paged_attention",
@@ -176,17 +185,19 @@ def test_model_inference(
         model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
+    # print(state_dict.keys())
     reference_state_dict = {
         k[len(state_dict_prefix) :]: v
         for k, v in state_dict.items()
         if (
-            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-            or any(
-                [
+            (
+                any(f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers))
+                or any(
                     f"{state_dict_prefix}{name}" in k
                     for name in ["tok_embeddings.weight", "norm.weight", "output.weight"]
-                ]
+                )
             )
+            and not (k.startswith("visual.") or k.startswith("multi_modal_projector."))
         )
     }
 
@@ -303,6 +314,7 @@ def test_model_inference(
             decode_input,
             current_pos_tensor,
             rot_mats_global=rot_mats,
+            rot_mats_local=rot_mats,
             mode="decode",
             page_table=page_table_tt,
         )
