@@ -1551,6 +1551,8 @@ class ModelArgs:
         """
         Returns the number of tokens per chunk, accounting for the extra class token
         """
+        if self.is_llama_vision():
+            return (self.vision_chunk_size // self.vision_patch_size) ** 2 + 1
         return (self.image_size // self.vision_patch_size) ** 2 + 1
 
     def _set_model_params(self, checkpoint_dir):
@@ -1684,7 +1686,12 @@ class ModelArgs:
 )"""
 
     # TODO: Rename to is_llama_vision
+    def is_llama_vision(self):
+        return self.vision_chunk_size > 0
+
     def is_vision(self):
+        if self.is_llama_vision():
+            return True
         return self.image_size > 0
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
