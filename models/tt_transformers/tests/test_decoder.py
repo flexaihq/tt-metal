@@ -181,7 +181,8 @@ def test_decoder_inference(
             )
             * 2
         ) - 1
-        pt_decode_input = pt_decode_input.to(torch.bfloat16)
+        if "gemma" in os.environ.get("HF_MODEL"):
+            pt_decode_input = pt_decode_input.to(torch.bfloat16)
         tt_decode_input = pt_decode_input.clone()
 
         decode_input = model_args.prepare_residual_tensor_decode(
