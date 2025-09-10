@@ -86,7 +86,7 @@ def test_attention_inference(
 
     seq_len = 1
 
-    generation_start_pos = 0
+    generation_start_pos = 1020
     generation_length = 10
     all_tests_pass = True
 
@@ -194,11 +194,11 @@ def test_attention_inference(
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
-        ref_rot_mats = reference_embed.forward(pt_attention_input, current_pos.unsqueeze(0).unsqueeze(0))
-        ref_rot_mats = (
-            torch.reshape(ref_rot_mats[0], [int(i) for i in rot_mats[0].shape]),
-            torch.reshape(ref_rot_mats[1], [int(i) for i in rot_mats[1].shape]),
-        )
+        # ref_rot_mats = reference_embed.forward(pt_attention_input, current_pos.unsqueeze(0).unsqueeze(0))
+        # ref_rot_mats = (
+        #    torch.reshape(ref_rot_mats[0], [int(i) for i in rot_mats[0].shape]),
+        #    torch.reshape(ref_rot_mats[1], [int(i) for i in rot_mats[1].shape]),
+        # )
         #        torch_rot_mats = (ttnn.to_torch(rot_mats[0], dtype=torch.float), ttnn.to_torch(rot_mats[1], dtype=torch.float))
         #        logger.info(f"ALL_CLOSE COS: {torch.allclose(ref_rot_mats[0], torch_rot_mats[0])}")
         #        logger.info(f"ALL_CLOSE SIN: {torch.allclose(ref_rot_mats[1], torch_rot_mats[1])}")
@@ -222,57 +222,57 @@ def test_attention_inference(
         #        with pd.option_context("display.max_rows", None, "display.max_columns", None):
         #            logger.info(f"\n{df}")
         #
-        rot_mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, dim),
-            core_grid=rope_setup.batch_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
+        # rot_mem_config = ttnn.create_sharded_memory_config(
+        #    shape=(ttnn.TILE_SIZE, dim),
+        #    core_grid=rope_setup.batch_grid,
+        #    strategy=ttnn.ShardStrategy.HEIGHT,
+        #    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        #    use_height_and_width_as_shard_shape=True,
+        # )
 
-        rot_mats = (
-            ttnn.from_torch(
-                ref_rot_mats[0],
-                device=mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=rot_mem_config,
-            ),
-            ttnn.from_torch(
-                ref_rot_mats[1],
-                device=mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=rot_mem_config,
-            ),
-        )
+        # rot_mats = (
+        #    ttnn.from_torch(
+        #        ref_rot_mats[0],
+        #        device=mesh_device,
+        #        dtype=ttnn.bfloat16,
+        #        layout=ttnn.TILE_LAYOUT,
+        #        memory_config=rot_mem_config,
+        #    ),
+        #    ttnn.from_torch(
+        #        ref_rot_mats[1],
+        #        device=mesh_device,
+        #        dtype=ttnn.bfloat16,
+        #        layout=ttnn.TILE_LAYOUT,
+        #        memory_config=rot_mem_config,
+        #    ),
+        # )
 
-        torch_rot_mats = (ttnn.to_torch(rot_mats[0]), ttnn.to_torch(rot_mats[1]))
-        logger.info(f"ALL_CLOSE COS: {torch.allclose(ref_rot_mats[0], torch_rot_mats[0])}")
-        logger.info(f"ALL_CLOSE SIN: {torch.allclose(ref_rot_mats[1], torch_rot_mats[1])}")
-        df = pd.DataFrame(
-            {
-                "cos_ref": ref_rot_mats[0].float().detach().numpy().flatten(),
-                "cos_act": torch_rot_mats[0].float().detach().numpy().flatten(),
-                "cos_diff": (
-                    torch.abs(ref_rot_mats[0].float() - torch_rot_mats[0].float())
-                    / (1e-9 + torch.abs(ref_rot_mats[0].float()))
-                )
-                .float()
-                .detach()
-                .numpy()
-                .flatten(),
-                "sin_ref": ref_rot_mats[1].float().detach().numpy().flatten(),
-                "sin_act": torch_rot_mats[1].float().detach().numpy().flatten(),
-                "sin_diff": (
-                    torch.abs(ref_rot_mats[1].float() - torch_rot_mats[1].float())
-                    / (1e-9 + torch.abs(ref_rot_mats[1].float()))
-                )
-                .detach()
-                .numpy()
-                .flatten(),
-            }
-        )
+        # torch_rot_mats = (ttnn.to_torch(rot_mats[0]), ttnn.to_torch(rot_mats[1]))
+        # logger.info(f"ALL_CLOSE COS: {torch.allclose(ref_rot_mats[0], torch_rot_mats[0])}")
+        # logger.info(f"ALL_CLOSE SIN: {torch.allclose(ref_rot_mats[1], torch_rot_mats[1])}")
+        # df = pd.DataFrame(
+        #    {
+        #        "cos_ref": ref_rot_mats[0].float().detach().numpy().flatten(),
+        #        "cos_act": torch_rot_mats[0].float().detach().numpy().flatten(),
+        #        "cos_diff": (
+        #            torch.abs(ref_rot_mats[0].float() - torch_rot_mats[0].float())
+        #            / (1e-9 + torch.abs(ref_rot_mats[0].float()))
+        #        )
+        #        .float()
+        #        .detach()
+        #        .numpy()
+        #        .flatten(),
+        #        "sin_ref": ref_rot_mats[1].float().detach().numpy().flatten(),
+        #        "sin_act": torch_rot_mats[1].float().detach().numpy().flatten(),
+        #        "sin_diff": (
+        #            torch.abs(ref_rot_mats[1].float() - torch_rot_mats[1].float())
+        #            / (1e-9 + torch.abs(ref_rot_mats[1].float()))
+        #        )
+        #        .detach()
+        #        .numpy()
+        #        .flatten(),
+        #    }
+        # )
         # with pd.option_context("display.max_rows", None, "display.max_columns", None):
         #    logger.info(f"\n{df}")
 
@@ -368,7 +368,7 @@ def test_attention_inference(
             logger.info(f"tt KV {[x.shape for x in tt_layer_present]}")
             for label, cache_pt, cache_tt in zip(["K", "V"], pytorch_layer_present, tt_layer_present):
                 cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
-                cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
+                cache_pt = cache_pt[:, :, 0 : i + 1, :]
                 cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
                 does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
                 logger.info(f"{label} cache output: {output_pcc}")

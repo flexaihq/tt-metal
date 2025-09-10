@@ -43,6 +43,8 @@ def debug_dump(node, path):
         for child in node.get("children", []):
             strip_values(child)
 
+    with open(f"{path}/FULL_TENSORS.json", "w") as f:
+        json.dump(node, f, indent=2)
     strip_values(node)
     with open(f"{path}/SUMMARY.json", "w") as f:
         json.dump(node, f, indent=2)
@@ -60,7 +62,15 @@ def make_debug_path(idx, attn):
 
 
 def make_debug_node(name):
-    return {"module_path": name, "inputs": None, "outputs": None, "children": []}
+    return {"module_path": name, "inputs": None, "children": [], "outputs": None}
+
+
+def debug_reassemble(tt_out, mesh_device, dim, max_batch_size, cluster_shape):
+    tt_out = ttnn.to_torch(
+        tt_out,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=cluster_shape),
+    )
+    return tt_out[:, 0:1, :max_batch_size, :dim].view(-1, 1, dim)
 
 
 class Attention(LightweightModule):
@@ -86,6 +96,7 @@ class Attention(LightweightModule):
         self.num_devices = configuration.num_devices
         self.TG = self.num_devices == 32
         self.hidden_size = configuration.dim
+        self.cluster_shape = configuration.cluster_shape
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim
         self.sliding_window = configuration.sliding_window
@@ -653,6 +664,7 @@ class Attention(LightweightModule):
                 ttnn.deallocate(all_gather_output)
             ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
+            self.debug_ctx["children"].append(make_debug_node("Gemma3Attention.o_proj"))
             return dense_out_sharded
 
         else:
@@ -721,6 +733,7 @@ class Attention(LightweightModule):
                     dense_out_reduced, self.model_config["DECODE_RESIDUAL_MEMCFG"]
                 )
 
+            self.debug_ctx["children"].append(make_debug_node("Gemma3Attention.o_proj"))
             return dense_out_reduced
 
     def forward_prefill(
@@ -988,9 +1001,12 @@ class Attention(LightweightModule):
         self.debug_ctx = make_debug_node(full_path)
         self.debug_ctx["inputs"] = _serialize_io(
             {
-                "args": [ttnn.to_torch(t) for t in [x, current_pos]],
-                "kwargs": {"position_embeddings": [ttnn.to_torch(t) for t in [rot_mats[0], rot_mats[1]]]},
+                "args": [
+                    debug_reassemble(x, self.mesh_device, self.hidden_size, self.max_batch_size, self.cluster_shape),
+                ],
+                "kwargs": {"position_embeddings": [ttnn.to_torch(t).squeeze(1) for t in [rot_mats[0], rot_mats[1]]]},
             },
+            use_repr=False,
             debug_path=debug_path(Attention.debug_print_idx, self),
             path_to_value=f"{full_path}_inputs",
         )
@@ -1009,7 +1025,8 @@ class Attention(LightweightModule):
             out = self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
 
         self.debug_ctx["outputs"] = _serialize_io(
-            ttnn.to_torch(out),
+            debug_reassemble(out, self.mesh_device, self.hidden_size, self.max_batch_size, self.cluster_shape),
+            use_repr=False,
             debug_path=debug_path(Attention.debug_print_idx, self),
             path_to_value=f"{full_path}_outputs",
         )
