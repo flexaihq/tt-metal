@@ -52,7 +52,7 @@ def debug_dump(node, path):
 
 def debug_path(idx, attn):
     attn_type = "sliding" if attn.is_sliding else "full"
-    return f"/home/user1/debug/ttnn/{attn_type}_{Attention.debug_print_idx}"
+    return f"/home/user1/debug/ttnn/{attn.layer_num}/{attn_type}_{Attention.debug_print_idx}"
 
 
 def make_debug_path(idx, attn):
@@ -160,6 +160,7 @@ class Attention(LightweightModule):
         self.is_sliding = (
             configuration.layer_types[layer_num] == "sliding_attention" if configuration.layer_types else False
         )
+        self.layer_num = layer_num
         logger.info(f"sliding attention for layer {layer_num}: {configuration.layer_types[layer_num]}")
 
         self.model_config = configuration.get_model_config()
@@ -529,8 +530,35 @@ class Attention(LightweightModule):
             memory_config=self.model_config["CREATE_QKV_DECODE_SHARD"],
         )
 
+        self.debug_ctx["children"].append(make_debug_node("Gemma3Attention.q_norm"))
+        self.debug_ctx["children"][-1]["inputs"] = _serialize_io(
+            {"args": [ttnn.to_torch(q_heads_pre_rot_1BQD).permute((0, 2, 1, 3))]},
+            debug_path(Attention.debug_print_idx, self),
+            path_to_value="Gemma3Attention.q_norm_inputs",
+            use_repr=False,
+        )
         q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode")
+        self.debug_ctx["children"][-1]["outputs"] = _serialize_io(
+            ttnn.to_torch(q_heads_pre_rot_1BQD).permute((0, 2, 1, 3)),
+            debug_path(Attention.debug_print_idx, self),
+            path_to_value="Gemma3Attention.q_norm_outputs",
+            use_repr=False,
+        )
+
+        self.debug_ctx["children"].append(make_debug_node("Gemma3Attention.k_norm"))
+        self.debug_ctx["children"][-1]["inputs"] = _serialize_io(
+            {"args": [ttnn.to_torch(k_heads_pre_rot_1BKD).permute(0, 2, 1, 3)]},
+            debug_path(Attention.debug_print_idx, self),
+            path_to_value="Gemma3Attention.k_norm_inputs",
+            use_repr=False,
+        )
         k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode")
+        self.debug_ctx["children"][-1]["outputs"] = _serialize_io(
+            ttnn.to_torch(k_heads_pre_rot_1BKD).permute((0, 2, 1, 3)),
+            debug_path(Attention.debug_print_idx, self),
+            path_to_value="Gemma3Attention.k_norm_outputs",
+            use_repr=False,
+        )
 
         ttnn.deallocate(xqkv_fused)
 
@@ -665,6 +693,15 @@ class Attention(LightweightModule):
             ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             self.debug_ctx["children"].append(make_debug_node("Gemma3Attention.o_proj"))
+            self.debug_ctx["children"][-1]["outputs"] = _serialize_io(
+                debug_reassemble(
+                    dense_out_sharded, self.mesh_device, self.hidden_size, self.max_batch_size, self.cluster_shape
+                ),
+                use_repr=False,
+                debug_path=debug_path(Attention.debug_print_idx, self),
+                path_to_value=f"Gemma3Attention.o_proj_outputs",
+            )
+
             return dense_out_sharded
 
         else:
@@ -734,6 +771,14 @@ class Attention(LightweightModule):
                 )
 
             self.debug_ctx["children"].append(make_debug_node("Gemma3Attention.o_proj"))
+            self.debug_ctx["children"][-1]["outputs"] = _serialize_io(
+                debug_reassemble(
+                    dense_out_reduced, self.mesh_device, self.hidden_size, self.max_batch_size, self.cluster_shape
+                ),
+                use_repr=False,
+                debug_path=debug_path(Attention.debug_print_idx, self),
+                path_to_value=f"Gemma3Attention.o_proj_outputs",
+            )
             return dense_out_reduced
 
     def forward_prefill(
@@ -980,6 +1025,13 @@ class Attention(LightweightModule):
                 dtype=self.ccl_dtype,
             )
         self.debug_ctx["children"].append(make_debug_node("Gemma3Attention.o_proj"))
+        self.debug_ctx["children"][-1]["outputs"] = _serialize_io(
+            debug_reassemble(output_11SH, self.mesh_device, self.hidden_size, self.max_batch_size, self.cluster_shape),
+            use_repr=False,
+            debug_path=debug_path(Attention.debug_print_idx, self),
+            path_to_value=f"Gemma3Attention.o_proj_outputs",
+        )
+
         return output_11SH
 
     def forward(
@@ -1023,13 +1075,6 @@ class Attention(LightweightModule):
             )
         else:
             out = self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
-
-        self.debug_ctx["outputs"] = _serialize_io(
-            debug_reassemble(out, self.mesh_device, self.hidden_size, self.max_batch_size, self.cluster_shape),
-            use_repr=False,
-            debug_path=debug_path(Attention.debug_print_idx, self),
-            path_to_value=f"{full_path}_outputs",
-        )
 
         debug_dump(self.debug_ctx, debug_path(Attention.debug_print_idx, self))
         return out

@@ -2629,7 +2629,7 @@ class HfAttentionWrapper:
             run_key = "sliding" if getattr(self.attention, "is_sliding", False) else "full"
             with model_addition_debugger_context(
                 self.attention,
-                debug_path=f"/home/user1/debug/torch/{run_key}_{HfAttentionWrapper.runs}",
+                debug_path=f"/home/user1/debug/torch/{self.attention.layer_idx}/{run_key}_{HfAttentionWrapper.runs}",
                 use_repr=False,
                 do_prune_layers=False,  # This will output ALL the layers of a model.
             ):
