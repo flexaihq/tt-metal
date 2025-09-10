@@ -31,7 +31,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (128, 1024, 2048),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc, use_scaled_embedding):
     dtype = ttnn.bfloat16

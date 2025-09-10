@@ -6,6 +6,7 @@ import math
 
 import torch
 from loguru import logger
+from transformers.model_debugging_utils import _serialize_io
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -14,7 +15,57 @@ from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
+def debug_print(value: torch.Tensor, name: str):
+    import json
+
+    value_str = _serialize_tensor_like_io(ttnn.to_torch(value))
+    with open(f"/home/user1/debug/ttnn/{name}/summary.json", "w") as f:
+        json.dump(value_str, f, indent=2)
+    logger.info(f"{name}:\n{value_str['std']}")
+
+
+def debug_dump(node, path):
+    import json
+
+    def strip_values(node):
+        def clean(val):
+            if isinstance(val, dict):
+                val.pop("value", None)
+                for v in val.values():
+                    clean(v)
+            elif isinstance(val, list):
+                for item in val:
+                    clean(item)
+
+        clean(node.get("inputs", {}))
+        clean(node.get("outputs", {}))
+
+        for child in node.get("children", []):
+            strip_values(child)
+
+    strip_values(node)
+    with open(f"{path}/SUMMARY.json", "w") as f:
+        json.dump(node, f, indent=2)
+
+
+def debug_path(idx, attn):
+    attn_type = "sliding" if attn.is_sliding else "full"
+    return f"/home/user1/debug/ttnn/{attn_type}_{Attention.debug_print_idx}"
+
+
+def make_debug_path(idx, attn):
+    import os
+
+    os.makedirs(debug_path(idx, attn), exist_ok=True)
+
+
+def make_debug_node(name):
+    return {"module_path": name, "inputs": None, "outputs": None, "children": []}
+
+
 class Attention(LightweightModule):
+    debug_print_idx = -1
+
     def __init__(
         self,
         mesh_device,
@@ -29,7 +80,7 @@ class Attention(LightweightModule):
         use_paged_kv_cache=False,
     ):
         super().__init__()
-
+        self.debug_ctx = {}
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
@@ -37,6 +88,7 @@ class Attention(LightweightModule):
         self.hidden_size = configuration.dim
         self.n_heads = configuration.n_heads
         self.head_dim = configuration.head_dim
+        self.sliding_window = configuration.sliding_window
         self.max_seq_len = configuration.max_seq_len
         self.max_batch_size = configuration.max_batch_size
         self.n_kv_heads = configuration.n_kv_heads
@@ -86,7 +138,6 @@ class Attention(LightweightModule):
 
         self.dtype = dtype
 
-        self.max_seq_len = configuration.max_seq_len
         self.grid_size = configuration.max_grid_size
 
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
@@ -98,7 +149,7 @@ class Attention(LightweightModule):
         self.is_sliding = (
             configuration.layer_types[layer_num] == "sliding_attention" if configuration.layer_types else False
         )
-        logger.info(f"sliding attention for layer {layer_num}: {self.is_sliding}, {configuration.layer_types}")
+        logger.info(f"sliding attention for layer {layer_num}: {configuration.layer_types[layer_num]}")
 
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
@@ -136,9 +187,9 @@ class Attention(LightweightModule):
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
-            cache_name = lambda _: None
+            self.cache_name = lambda _: None
         else:
-            cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
+            self.cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
 
         wq_str = f"{layer_name}.wq"
         wk_str = f"{layer_name}.wk"
@@ -175,7 +226,7 @@ class Attention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wqkv_bias_prefill_sharded"),
+                cache_file_name=self.cache_name("wqkv_bias_prefill_sharded"),
             )
             # as_tensor returns (32, dim) which is incorrect, this reshape updates the padded size to the correct size
             self.wqkv_bias_prefill = ttnn.reshape(
@@ -200,7 +251,7 @@ class Attention(LightweightModule):
                     dtype=ttnn.bfloat16,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     layout=ttnn.TILE_LAYOUT,
-                    cache_file_name=cache_name(f"wqkv_bias_decode_sharded_{batch_size}"),
+                    cache_file_name=self.cache_name(f"wqkv_bias_decode_sharded_{batch_size}"),
                 )
                 self.wqkv_bias_decode.append(bias_tensor)
 
@@ -241,7 +292,7 @@ class Attention(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
             ),
-            cache_file_name=cache_name("wqkv_sharded_2d"),
+            cache_file_name=self.cache_name("wqkv_sharded_2d"),
         )
 
         def norm_reshard(x, norm, mode):
@@ -314,7 +365,9 @@ class Attention(LightweightModule):
                 mesh_shape=configuration.cluster_shape,
             ),
             cache_file_name=(
-                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
+                self.cache_name("wo_width_sharded_2d")
+                if (self.use_fused_all_gather_matmul or self.TG)
+                else self.cache_name("wo")
             ),
         )
         if not use_paged_kv_cache:
@@ -375,7 +428,7 @@ class Attention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=(
-                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                    self.cache_name(f"kvcache_{k_or_v.shape}")
                     if weight_cache_path and not configuration.dummy_weights
                     else None
                 ),
@@ -471,14 +524,18 @@ class Attention(LightweightModule):
         ttnn.deallocate(xqkv_fused)
 
         # Q Rotary Embeddings
+        cos, sin = rot_mats
         q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
+            q_heads_pre_rot_1BQD, cos, sin, self.transformation_mats["decode"], is_decode_mode=True
         )
+        attn_type = "sliding" if self.is_sliding else "full"
+        # debug_print(q_heads_1BQD, f"{attn_type}_{Attention.debug_print_idx}/q_heads")
 
         # K Rotary Embeddings
         k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
+            k_heads_pre_rot_1BKD, cos, sin, self.transformation_mats["decode"], is_decode_mode=True
         )
+        # debug_print(k_heads_1BKD, f"{attn_type}_{Attention.debug_print_idx}/k_heads")
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
@@ -513,6 +570,7 @@ class Attention(LightweightModule):
                 keys,
                 values,
                 cur_pos_tensor=current_pos,
+                is_causal=True,
                 page_table_tensor=page_table,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
@@ -525,6 +583,7 @@ class Attention(LightweightModule):
                 keys,
                 values,
                 cur_pos_tensor=current_pos,
+                is_causal=True,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
@@ -729,7 +788,10 @@ class Attention(LightweightModule):
         )
 
         q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
+        self.debug_ctx["children"].append(make_debug_node("Gemma3Attention.q_norm"))
+
         k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
+        self.debug_ctx["children"].append(make_debug_node("Gemma3Attention.k_norm"))
 
         ttnn.deallocate(xqkv_fused)
 
@@ -827,6 +889,7 @@ class Attention(LightweightModule):
                 values_BKSD,
                 page_table,
                 chunk_start_idx,
+                scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
@@ -903,7 +966,7 @@ class Attention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
             )
-
+        self.debug_ctx["children"].append(make_debug_node("Gemma3Attention.o_proj"))
         return output_11SH
 
     def forward(
@@ -918,8 +981,22 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
+        Attention.debug_print_idx += 1
+        make_debug_path(Attention.debug_print_idx, self)
+        full_path = "Gemma3Attention"
+
+        self.debug_ctx = make_debug_node(full_path)
+        self.debug_ctx["inputs"] = _serialize_io(
+            {
+                "args": [ttnn.to_torch(t) for t in [x, current_pos]],
+                "kwargs": {"position_embeddings": [ttnn.to_torch(t) for t in [rot_mats[0], rot_mats[1]]]},
+            },
+            debug_path=debug_path(Attention.debug_print_idx, self),
+            path_to_value=f"{full_path}_inputs",
+        )
+        out = None
         if mode == "prefill":
-            return self.forward_prefill(
+            out = self.forward_prefill(
                 x,
                 rot_mats,
                 user_id,
@@ -929,7 +1006,16 @@ class Attention(LightweightModule):
                 kv_cache=kv_cache,
             )
         else:
-            return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
+            out = self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
+
+        self.debug_ctx["outputs"] = _serialize_io(
+            ttnn.to_torch(out),
+            debug_path=debug_path(Attention.debug_print_idx, self),
+            path_to_value=f"{full_path}_outputs",
+        )
+
+        debug_dump(self.debug_ctx, debug_path(Attention.debug_print_idx, self))
+        return out
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
         tensor_copy = ttnn.clone(key_or_value_layer)

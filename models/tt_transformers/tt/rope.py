@@ -509,8 +509,20 @@ class RotarySetup(LightweightModule):
             rot_idxs = ttnn.to_device(rot_idxs, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         embedding_layout = ttnn.TILE_LAYOUT
-        cos = ttnn.embedding(rot_idxs, self.cos_matrix, layout=embedding_layout)  # [1, batch, head_dim]
-        sin = ttnn.embedding(rot_idxs, self.sin_matrix, layout=embedding_layout)  # [1, batch, head_dim]
+        cos = ttnn.embedding(
+            rot_idxs,
+            self.cos_matrix,
+            layout=embedding_layout,
+            padding_idx=0,
+            embeddings_type=ttnn.EmbeddingsType.PADDED,
+        )  # [1, batch, head_dim]
+        sin = ttnn.embedding(
+            rot_idxs,
+            self.sin_matrix,
+            layout=embedding_layout,
+            padding_idx=0,
+            embeddings_type=ttnn.EmbeddingsType.PADDED,
+        )  # [1, batch, head_dim]
 
         cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
         sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]

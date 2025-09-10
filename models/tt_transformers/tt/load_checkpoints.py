@@ -532,12 +532,15 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
             # For weights: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
+            assert torch.numel(tensor) == torch.numel(converted_weights[key])
         elif "q_proj.bias" in key or "k_proj.bias" in key:
             # For biases: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
+            assert torch.numel(tensor) == torch.numel(converted_weights[key])
         elif "q_norm.weight" in key or "k_norm.weight" in key:
             converted_weights[key] = reverse_permute_1d(tensor)
+            assert torch.numel(tensor) == torch.numel(converted_weights[key])
         else:
             # Keep all other weights unchanged
             converted_weights[key] = tensor
@@ -581,6 +584,7 @@ def fuse_qkv_meta(state_dict):
 
         prefix = wq_key[: -len("wq.weight")]
         fused_qkv_weights = torch.vstack((wq, wk, wv))
+        logger.info(f"Fusing weights wq {wq.shape}, wk {wk.shape}, wv {wv.shape} -> wqkv {fused_qkv_weights.shape}")
         state_dict[f"{prefix}wqkv.weight"] = fused_qkv_weights
 
         del state_dict[wq_key], state_dict[wk_key], state_dict[wv_key]

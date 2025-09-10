@@ -10,7 +10,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig
@@ -51,7 +50,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (2048,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 @pytest.mark.parametrize(
@@ -177,11 +176,12 @@ def test_attention_inference(
             mesh_shape=model_args.cluster_shape,
         ),
     )
+    pccs = []
 
     for i in range(generation_length):
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
-        pt_attention_input = torch.randn(
-            batch_size, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim, dtype=torch.float).to(
+            dtype=torch.bfloat16
         )  # Qwen2.5 0.5B sees 0.1 to 2.1
 
         tt_attention_input = pt_attention_input.clone()
@@ -199,28 +199,82 @@ def test_attention_inference(
             torch.reshape(ref_rot_mats[0], [int(i) for i in rot_mats[0].shape]),
             torch.reshape(ref_rot_mats[1], [int(i) for i in rot_mats[1].shape]),
         )
-        torch_rot_mats = (ttnn.to_torch(rot_mats[0], dtype=torch.float), ttnn.to_torch(rot_mats[1], dtype=torch.float))
+        #        torch_rot_mats = (ttnn.to_torch(rot_mats[0], dtype=torch.float), ttnn.to_torch(rot_mats[1], dtype=torch.float))
+        #        logger.info(f"ALL_CLOSE COS: {torch.allclose(ref_rot_mats[0], torch_rot_mats[0])}")
+        #        logger.info(f"ALL_CLOSE SIN: {torch.allclose(ref_rot_mats[1], torch_rot_mats[1])}")
+        #        df = pd.DataFrame(
+        #            {
+        #                "cos_ref": ref_rot_mats[0].detach().numpy().flatten(),
+        #                "cos_act": torch_rot_mats[0].detach().numpy().flatten(),
+        #                "cos_diff": (torch.abs(ref_rot_mats[0] - torch_rot_mats[0]) / (1e-9 + torch.abs(ref_rot_mats[0])))
+        #                .detach()
+        #                .numpy()
+        #                .flatten(),
+        #                "sin_ref": ref_rot_mats[1].detach().numpy().flatten(),
+        #                "sin_act": torch_rot_mats[1].detach().numpy().flatten(),
+        #                "sin_diff": (torch.abs(ref_rot_mats[1] - torch_rot_mats[1]) / (1e-9 + torch.abs(ref_rot_mats[1])))
+        #                .detach()
+        #                .numpy()
+        #                .flatten(),
+        #            }
+        #        )
+        #        # df = df[df["diff"] > 1e6]
+        #        with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        #            logger.info(f"\n{df}")
+        #
+        rot_mem_config = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, dim),
+            core_grid=rope_setup.batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        rot_mats = (
+            ttnn.from_torch(
+                ref_rot_mats[0],
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=rot_mem_config,
+            ),
+            ttnn.from_torch(
+                ref_rot_mats[1],
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=rot_mem_config,
+            ),
+        )
+
+        torch_rot_mats = (ttnn.to_torch(rot_mats[0]), ttnn.to_torch(rot_mats[1]))
         logger.info(f"ALL_CLOSE COS: {torch.allclose(ref_rot_mats[0], torch_rot_mats[0])}")
         logger.info(f"ALL_CLOSE SIN: {torch.allclose(ref_rot_mats[1], torch_rot_mats[1])}")
         df = pd.DataFrame(
             {
-                "cos_ref": ref_rot_mats[0].detach().numpy().flatten(),
-                "cos_act": torch_rot_mats[0].detach().numpy().flatten(),
-                "cos_diff": (torch.abs(ref_rot_mats[0] - torch_rot_mats[0]) / (1e-9 + torch.abs(ref_rot_mats[0])))
+                "cos_ref": ref_rot_mats[0].float().detach().numpy().flatten(),
+                "cos_act": torch_rot_mats[0].float().detach().numpy().flatten(),
+                "cos_diff": (
+                    torch.abs(ref_rot_mats[0].float() - torch_rot_mats[0].float())
+                    / (1e-9 + torch.abs(ref_rot_mats[0].float()))
+                )
+                .float()
                 .detach()
                 .numpy()
                 .flatten(),
-                "sin_ref": ref_rot_mats[1].detach().numpy().flatten(),
-                "sin_act": torch_rot_mats[1].detach().numpy().flatten(),
-                "sin_diff": (torch.abs(ref_rot_mats[1] - torch_rot_mats[1]) / (1e-9 + torch.abs(ref_rot_mats[1])))
+                "sin_ref": ref_rot_mats[1].float().detach().numpy().flatten(),
+                "sin_act": torch_rot_mats[1].float().detach().numpy().flatten(),
+                "sin_diff": (
+                    torch.abs(ref_rot_mats[1].float() - torch_rot_mats[1].float())
+                    / (1e-9 + torch.abs(ref_rot_mats[1].float()))
+                )
                 .detach()
                 .numpy()
                 .flatten(),
             }
         )
-        # df = df[df["diff"] > 1e6]
-        with pd.option_context("display.max_rows", None, "display.max_columns", None):
-            logger.info(f"\n{df}")
+        # with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        #    logger.info(f"\n{df}")
 
         tt_out = tt_model(
             attention_input,
@@ -242,7 +296,7 @@ def test_attention_inference(
         reference_output = reference_model(pt_attention_input, current_pos[0], freqs_cis_i, mask=None)
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
-
+        pccs.append(pcc_message)
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
         if passing:
@@ -264,13 +318,14 @@ def test_attention_inference(
             ),
         )
 
-        check_kv_cache = False
+        check_kv_cache = True
         if check_kv_cache:
             # PyTorch output --------------------------------------------------------------------
             pytorch_layer_present = [
                 reference_model.cache_k.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
                 reference_model.cache_v.clone().permute(0, 2, 1, 3),  # [batch_size, n_kv_heads, seq, head_dim]
             ]
+            logger.info(f"ref KV {[x.shape for x in pytorch_layer_present]}")
             # TT hardware execution -------------------------------------------------------------
             if paged_attention:
                 tt_layer_present = [
@@ -309,6 +364,8 @@ def test_attention_inference(
                     )[:batch_size, :, :, :]
                     for cache in tt_model.layer_past
                 ]
+
+            logger.info(f"tt KV {[x.shape for x in tt_layer_present]}")
             for label, cache_pt, cache_tt in zip(["K", "V"], pytorch_layer_present, tt_layer_present):
                 cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
                 cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
@@ -320,6 +377,16 @@ def test_attention_inference(
                 else:
                     logger.warning(f"{label} Cache Failed! PCC value is lower than {pcc}")
                     all_tests_pass = False
+
+    with pd.option_context("display.max_rows", None, "display.max_columns", None):
+        logger.info(
+            pd.DataFrame(
+                {
+                    "pos": [i for i in range(generation_start_pos, generation_start_pos + generation_length)],
+                    "pccs": pccs,
+                }
+            )
+        )
 
     if all_tests_pass:
         logger.info("Attention output Passed!")

@@ -137,8 +137,8 @@ class ModelOptimizations:
                         "OpFidelity": {
                             OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
                             OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
-                            OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
-                            OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                            OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4_FP32,
+                            OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4_FP32,
                             OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
                             OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
                         },
@@ -167,8 +167,8 @@ class ModelOptimizations:
                     "OpFidelity": {
                         OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
                         OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
-                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
-                        OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4_FP32,
+                        OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4_FP32,
                         OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
                         OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
                     },
@@ -262,7 +262,8 @@ class ModelOptimizations:
                 OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4_FP32,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4_FP32,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
                 OpGroup.ACCURACY: MathFidelitySetting.HIFI4_FP32,
             },
@@ -688,6 +689,7 @@ class ModelArgs:
             )
             self.compute_kernel_config_hifi4_fp32 = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
                 dst_full_sync_en=False,
@@ -1454,7 +1456,6 @@ class ModelArgs:
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
         self.eos_token_id = None if isinstance(eos_token_id, int) else eos_token_id
-        layer_types = text_config["layer_types"] if "layer_types" in text_config else None
 
         # Common params with different names between Meta and HF
         self.dim = text_config.get("dim", text_config.get("hidden_size"))
@@ -1529,6 +1530,7 @@ class ModelArgs:
                     self.hidden_dim = padded_hidden_dim
 
         self.layer_types = text_config.get("layer_types", None)
+        self.sliding_window = text_config.get("sliding_window", None)
 
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
@@ -1784,6 +1786,7 @@ class ModelArgs:
                     self.CKPT_DIR,
                     torch_dtype="auto",
                     trust_remote_code=self.trust_remote_code_hf,
+                    use_safetensors=True,
                     # Note that the default setting is torch.dtype.float32, but model weights are
                     # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                     # unnecessary cast.
@@ -2299,7 +2302,9 @@ class ModelArgs:
                 if "gemma-3" in self.model_name:
                     from transformers import Gemma3ForConditionalGeneration
 
-                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, device_map="auto")
+                    model = Gemma3ForConditionalGeneration.from_pretrained(
+                        self.CKPT_DIR, device_map="auto", torch_dtype="auto", use_safetensors=True
+                    )
                 else:
                     if self.cache_hf_flag and self.cached_hf_model is None:
                         model = AutoModelForCausalLM.from_pretrained(
@@ -2492,13 +2497,9 @@ class ModelArgs:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
             use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer"
-            if hasattr(model.model, "rotary_emb_local"):
-                rotary_emb_local = model.model.rotary_emb_local
-            else:
-                rotary_emb_local = None
-            wrapper = HfDecoderWrapper(
-                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None, rotary_emb_local
-            )
+            rotary_emb = getattr(model.model, "rotary_emb", None)
+            rotary_emb_local = getattr(model.model, "rotary_emb_local", None)
+            wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
             return wrapper
 
     def reference_attention(self, layer_idx=0):
@@ -2625,9 +2626,10 @@ class HfAttentionWrapper:
                 position_embeddings = self.rotary_emb(x, position_ids)
             from transformers.model_debugging_utils import model_addition_debugger_context
 
+            run_key = "sliding" if getattr(self.attention, "is_sliding", False) else "full"
             with model_addition_debugger_context(
                 self.attention,
-                debug_path=f"/home/user1/debug/{HfAttentionWrapper.runs}",
+                debug_path=f"/home/user1/debug/torch/{run_key}_{HfAttentionWrapper.runs}",
                 do_prune_layers=False,  # This will output ALL the layers of a model.
             ):
                 output, _ = self.attention(
@@ -2660,7 +2662,7 @@ class HfAttentionWrapper:
 
     @property
     def cache_k(self):
-        [(k, v)] = self.past_key_value.to_legacy_cache()
+        [(k, v)] = self.past_key_value.to_legacy_cache()[-1:]
         hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
         batch_size, seq_len, n_heads, head_dim = hf_k.shape
 
@@ -2678,7 +2680,7 @@ class HfAttentionWrapper:
 
     @property
     def cache_v(self):
-        [(k, v)] = self.past_key_value.to_legacy_cache()
+        [(k, v)] = self.past_key_value.to_legacy_cache()[-1:]
         return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
@@ -2739,43 +2741,26 @@ class HfDecoderWrapper:
 
 
 class HfModelWrapper:
-    def __init__(self, model, head_dim, debug=False):
+    def __init__(self, model, head_dim):
         from transformers import DynamicCache
 
         self.model = model
         self.head_dim = head_dim
         self.past_key_values = DynamicCache()
-        self.debug = debug
 
     def forward(self, inputs_embeds, start_pos, mode="decode"):
         position_ids = torch.tensor(
             [list(range(start_pos, start_pos + inputs_embeds.shape[1]))] * inputs_embeds.shape[0]
         )
-        if self.debug:
-            from transformers import model_addition_debugger_context
 
-            with model_addition_debugger_context(
-                self.model,
-                debug_path="optional_path_to_your_directory",
-                do_prune_layers=False,  # This will output ALL the layers of a model.
-            ):
-                logits, new_cache, hidden_states = self.model.forward(
-                    inputs_embeds=inputs_embeds,
-                    position_ids=position_ids,
-                    use_cache=True,
-                    past_key_values=self.past_key_values,
-                    return_dict=False,
-                    output_hidden_states=True,
-                )
-        else:
-            logits, new_cache, hidden_states = self.model.forward(
-                inputs_embeds=inputs_embeds,
-                position_ids=position_ids,
-                use_cache=True,
-                past_key_values=self.past_key_values,
-                return_dict=False,
-                output_hidden_states=True,
-            )
+        logits, new_cache, hidden_states = self.model.forward(
+            inputs_embeds=inputs_embeds,
+            position_ids=position_ids,
+            use_cache=True,
+            past_key_values=self.past_key_values,
+            return_dict=False,
+            output_hidden_states=True,
+        )
         self.past_key_values = new_cache
         return logits if mode == "decode" else hidden_states[-2]  # last hidden state is final norm
 
