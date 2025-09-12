@@ -51,6 +51,7 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Phi-3-mini-128k-instruct | N150        | 89        | 99        | 45.0          | 73.32     |
 | Phi-3-mini-128k-instruct | N300        | 89        | 99        | 60.87         | 114.94    |
 | Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 67.82         | 53.93     |
+| gemma-3-1b        | N150        |32         |48         | 53.3          |59.9       |
 | gemma-3-4b        | N150        | 78        | 95        | 34            | 68        |
 | gemma-3-4b        | N300        | 78        | 95        | 35            | 125       |
 | gemma-3-27b       | T3K         | 90        | 99        | 16            | 331       |
@@ -94,6 +95,7 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Phi-3-mini-128k-instruct | N150        | 94        | 99        | 40.41         | 82.58     |
 | Phi-3-mini-128k-instruct | N300        | 94        | 99        | 57.0          | 115.36    |
 | Mixtral-8x7B-v0.1 | T3K         | 95        | 100       | 67.82         | 53.93     |
+| gemma-3-1b        | N150        |32         |48         | 51.0          |62.02      |
 | gemma-3-4b        | N150        | 88        | 98        | 30            | 79        |
 | gemma-3-4b        | N300        | 86        | 98        | 32            | 135       |
 | gemma-3-27b       | T3K         | 91        | 100       | 15            | 361       |
