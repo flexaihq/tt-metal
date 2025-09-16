@@ -41,6 +41,7 @@ class Attention(LightweightModule):
     ):
         super().__init__()
 
+        self.layer_idx = layer_num
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
@@ -400,6 +401,7 @@ class Attention(LightweightModule):
         rot_mats=None,
         page_table=None,
         kv_cache=None,
+        causal_mask=None,
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -517,29 +519,60 @@ class Attention(LightweightModule):
         # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
-        if page_table:
-            attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                q_heads_1BQD,
-                keys,
-                values,
-                cur_pos_tensor=current_pos,
-                page_table_tensor=page_table,
-                scale=self.scale,
-                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        else:
-            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
-                q_heads_1BQD,
-                keys,
-                values,
-                cur_pos_tensor=current_pos,
-                scale=self.scale,
-                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
-            )
+
+        causal_mask = ttnn.to_torch(causal_mask)
+        attention_mask = causal_mask.repeat_interleave(4, 1)
+
+        c = ttnn.to_torch(current_pos)
+        values = ttnn.to_torch(values).to(torch.bfloat16)
+        q_heads_1BQD = ttnn.to_torch(q_heads_1BQD).to(torch.bfloat16)
+        keys = ttnn.to_torch(keys).to(torch.bfloat16)
+        slice_keys = keys[:, :, :c, :]
+        slice_values = values[:, :, :c, :]
+        attention_mask = attention_mask[:, :, :, :c]
+        attention_mask = attention_mask.transpose(1, 2)
+        torch_attn_output_1G4D = torch.nn.functional.scaled_dot_product_attention(
+            q_heads_1BQD,
+            slice_keys,  # Use the sliced tensor
+            slice_values,
+            attn_mask=attention_mask,  # Use the sliced tensor
+            scale=self.scale,
+            is_causal=False,  # is_causal=False because Q has seqlen=1, no masking needed
+            dropout_p=0.0,
+        )
+
+        attn_output_1G4D = ttnn.from_torch(
+            torch_attn_output_1G4D, dtype=ttnn.bfloat16, device=self.mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+        q_heads_1BQD = ttnn.from_torch(
+            q_heads_1BQD, dtype=ttnn.bfloat16, device=self.mesh_device, layout=ttnn.TILE_LAYOUT
+        )
+
+        # if page_table:
+        #     attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        #         q_heads_1BQD,
+        #         keys,
+        #         values,
+        #         cur_pos_tensor=current_pos,
+        #         page_table_tensor=page_table,
+        #         scale=self.scale,
+        #         program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+        #         compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
+        #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        #     )
+        # else:
+        #     attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
+        #         q_heads_1BQD,
+        #         keys,
+        #         values,
+        #         cur_pos_tensor=current_pos,
+        #         scale=self.scale,
+        #         # attn_mask=attn_mask,
+        #         # is_causal=False,
+        #         program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+        #         compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
+        #         memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
+        #     )
 
         ttnn.deallocate(q_heads_1BQD)
 
@@ -683,6 +716,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        causal_mask=None,
     ):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
@@ -927,6 +961,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        causal_mask=None,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -937,9 +972,12 @@ class Attention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
+                causal_mask=causal_mask,
             )
         else:
-            return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
+            return self.forward_decode(
+                x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache, causal_mask=causal_mask
+            )
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
         tensor_copy = ttnn.clone(key_or_value_layer)
