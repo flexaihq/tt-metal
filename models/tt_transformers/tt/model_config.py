@@ -1430,6 +1430,7 @@ class ModelArgs:
         if is_gemma3:
             self.rms_norm_add_unit_offset = True
             self.embed_scale = self.dim**0.5
+            self.sliding_window = 512
 
     def _set_params_from_dict(self, config, is_hf=False):
         eos_token_id = config.get("eos_token_id", None)
