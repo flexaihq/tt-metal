@@ -520,8 +520,7 @@ class Attention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
 
-        causal_mask = ttnn.to_torch(causal_mask)
-        attention_mask = causal_mask.repeat_interleave(4, 1)
+        attention_mask = ttnn.to_torch(causal_mask)
 
         c = ttnn.to_torch(current_pos)
         values = ttnn.to_torch(values).to(torch.bfloat16)

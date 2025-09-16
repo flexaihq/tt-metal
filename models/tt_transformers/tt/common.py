@@ -810,8 +810,8 @@ def create_causal_mask(input_embeds, attention_mask, cache_position, args):
         dtype=dtype,
     )
     causal_mask = convert_attn_mask(causal_mask)
-    if cache_position.ndim == 1 and cache_position.shape[0] == 1:
-        torch.save(causal_mask, f"ttnn_attn_mask/causal_mask_{cache_position.item()}_0.pt")
+    causal_mask = causal_mask.repeat_interleave(args.n_heads, 1)
+
     causal_mask = ttnn.as_tensor(
         causal_mask,
         dtype=ttnn.bfloat4_b,
@@ -893,8 +893,8 @@ def create_sliding_window_causal_mask(
     )
     causal_mask = convert_attn_mask(causal_mask)
 
-    if cache_position.ndim == 1 and cache_position.shape[0] == 1:
-        torch.save(causal_mask, f"ttnn_attn_mask_sliding/causal_mask_{cache_position.item()}_0.pt")
+    causal_mask = causal_mask.repeat_interleave(args.n_heads, 1)
+
     causal_mask = ttnn.as_tensor(
         causal_mask,
         dtype=ttnn.bfloat4_b,
