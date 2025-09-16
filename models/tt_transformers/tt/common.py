@@ -6,7 +6,6 @@ import math
 import os
 import re
 from enum import Enum
-from types import SimpleNamespace
 from typing import Optional
 
 import torch
@@ -498,6 +497,10 @@ def copy_host_to_device(
         for i in range(len(host_tensors)):
             if shard_specs and shard_specs[i] is not None:
                 on_device = host_tensors[i].to(mesh_device, shard_specs[i]) if host_tensors[i] else None
+
+            elif isinstance(host_tensors[i], list):
+                # Handle list of tensors
+                on_device = [ttnn.to_device(v, device=mesh_device) for v in host_tensors[i]]
             else:
                 on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
             ret.append(on_device)
@@ -746,46 +749,3 @@ def create_tt_model(
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
 
     return tt_model_args, model, tt_kv_cache, state_dict
-
-
-def hf_multimodal_encode(messages, processor):
-    hf_messages = []
-
-    for msg in messages:
-        hf_content = []
-
-        for item in msg.content:
-            if isinstance(item, ImageMedia):
-                hf_content.append(
-                    {
-                        "type": "image",
-                        "image": item.image,
-                    }
-                )
-            elif isinstance(item, str):
-                hf_content.append(
-                    {
-                        "type": "text",
-                        "text": item,
-                    }
-                )
-
-        hf_messages.append(
-            {
-                "role": msg.role,
-                "content": hf_content,
-            }
-        )
-
-    encoded = processor.apply_chat_template(
-        hf_messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
-    ).to("cpu", dtype=torch.bfloat16)
-
-    return SimpleNamespace(
-        **encoded,
-        tokens=encoded["input_ids"].squeeze(0),
-        vision=SimpleNamespace(
-            images=encoded.get("pixel_values", None),
-            mask=None,
-        ),
-    )

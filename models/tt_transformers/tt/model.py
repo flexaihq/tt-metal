@@ -188,7 +188,14 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
+        return (
+            tokens_embd,
+            tt_rot_mats_prefill_global,
+            tt_rot_mats_prefill_local,
+            tt_page_table,
+            tt_chunk_page_table,
+            None,
+        )
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -251,7 +258,7 @@ class Transformer(LightweightModule):
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
-        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table
+        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table, None
 
     def _transform_decode_inputs_device(self, tokens):
         """
@@ -317,6 +324,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        **kwargs,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -361,6 +369,7 @@ class Transformer(LightweightModule):
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
+        **kwargs,
     ):
         """
         This method will take device tensors and any other args to run forward.
