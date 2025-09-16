@@ -791,17 +791,22 @@ def convert_attn_mask(mask: torch.Tensor) -> torch.Tensor:
     return torch.where(mask, torch.tensor(0.0, dtype=torch.float32), torch.finfo(torch.float32).min)
 
 
-def create_causal_mask(input_embeds, attention_mask, cache_position, args):
+def create_causal_mask(input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None):
     layer_idx = 0
-    max_seq_len = args.max_seq_len
+
+    n_local_kv_heads = args.n_kv_heads // args.num_devices
+    if PagedAttentionConfig is not None:
+        max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+    else:
+        max_seq_len = args.max_seq_len
     early_exit, attention_mask, kv_length, kv_offset = _preprocess_mask_arguments(
         attention_mask, cache_position, max_seq_len
     )
-    batch_size, dtype = input_embeds.shape[1], input_embeds.dtype
+    batch_size, dtype = args.max_batch_size, input_embeds.dtype
     mask_factory_function = causal_mask_function
 
     causal_mask = sdpa_mask_recent_torch(
-        batch_size=batch_size,
+        batch_size=args.max_batch_size,
         cache_position=cache_position,
         kv_length=kv_length,
         kv_offset=kv_offset,
@@ -810,7 +815,7 @@ def create_causal_mask(input_embeds, attention_mask, cache_position, args):
         dtype=dtype,
     )
     causal_mask = convert_attn_mask(causal_mask)
-    causal_mask = causal_mask.repeat_interleave(args.n_heads, 1)
+    causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
 
     causal_mask = ttnn.as_tensor(
         causal_mask,
@@ -841,25 +846,21 @@ def sliding_window_causal_mask_function(sliding_window: int) -> Callable:
     return and_masks(sliding_window_overlay(sliding_window), causal_mask_function)
 
 
-def create_sliding_window_causal_mask(
-    input_embeds,
-    attention_mask,
-    cache_position,
-    args,
-):
+def create_sliding_window_causal_mask(input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None):
     layer_idx = 0
 
-    max_seq_len = args.max_seq_len
+    n_local_kv_heads = args.n_kv_heads // args.num_devices
+    if PagedAttentionConfig is not None:
+        max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+    else:
+        max_seq_len = args.max_seq_len
+
     early_exit, attention_mask, kv_length, kv_offset = _preprocess_mask_arguments(
         attention_mask, cache_position, max_seq_len
     )
+    sliding_window = args.sliding_window
 
-    # sliding_window = getattr(config, "sliding_window", None)
-    sliding_window = 512
-    if sliding_window is None:
-        raise ValueError("Could not find a `sliding_window` argument in the config, or it is not set")
-
-    batch_size, dtype = input_embeds.shape[0], input_embeds.dtype
+    batch_size, dtype = args.max_batch_size, input_embeds.dtype
     mask_factory_function = sliding_window_causal_mask_function(sliding_window)
     mask_interface = sdpa_mask_recent_torch
 
@@ -867,23 +868,9 @@ def create_sliding_window_causal_mask(
     # mask_factory_function = and_masks(mask_factory_function, and_mask_function)
     allow_is_causal_skip = False
 
-    """
-
-    def sdpa_mask_recent_torch(
-        batch_size: int,
-        cache_position: torch.Tensor,
-        kv_length: int,
-        kv_offset: int,
-        mask_function: Callable[[int, int, int, int], bool],
-        attention_mask: torch.Tensor = None,
-        dtype: torch.dtype = torch.float32,
-    ) -> torch.Tensor:
-
-
-    """
     # We now create the mask
     causal_mask = mask_interface(
-        batch_size=batch_size,
+        batch_size=args.max_batch_size,
         cache_position=cache_position,
         kv_length=kv_length,
         kv_offset=kv_offset,
@@ -893,7 +880,7 @@ def create_sliding_window_causal_mask(
     )
     causal_mask = convert_attn_mask(causal_mask)
 
-    causal_mask = causal_mask.repeat_interleave(args.n_heads, 1)
+    causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
 
     causal_mask = ttnn.as_tensor(
         causal_mask,

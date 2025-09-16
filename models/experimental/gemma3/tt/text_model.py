@@ -41,6 +41,7 @@ class Gemma3Transformer(LightweightModule):
     ):
         super().__init__()
         self.args = args
+        self.paged_attention_config = paged_attention_config
         self.vocab_size = args.vocab_size
         self.tt_ccl = TT_CCL(mesh_device)
         assert self.vocab_size > 0
@@ -271,8 +272,10 @@ class Gemma3Transformer(LightweightModule):
         attn_mask = torch.ones(S + 1).unsqueeze(0)
         cache_postion = torch.arange(S).unsqueeze(0)
         attention_mask = [
-            create_sliding_window_causal_mask(tokens_embd, attn_mask, cache_postion, self.args),
-            create_causal_mask(tokens_embd, attn_mask, cache_postion, self.args),
+            create_sliding_window_causal_mask(
+                tokens_embd, attn_mask, cache_postion, self.args, self.paged_attention_config
+            ),
+            create_causal_mask(tokens_embd, attn_mask, cache_postion, self.args, self.paged_attention_config),
         ]
         return (
             tokens_embd,
@@ -347,8 +350,8 @@ class Gemma3Transformer(LightweightModule):
         attn_mask = torch.ones(current_pos + 1).unsqueeze(0)
 
         attention_mask = [
-            create_sliding_window_causal_mask(tokens, attn_mask, current_pos, self.args),
-            create_causal_mask(tokens, attn_mask, current_pos, self.args),
+            create_sliding_window_causal_mask(tokens, attn_mask, current_pos, self.args, self.paged_attention_config),
+            create_causal_mask(tokens, attn_mask, current_pos, self.args, self.paged_attention_config),
         ]
 
         return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table, attention_mask

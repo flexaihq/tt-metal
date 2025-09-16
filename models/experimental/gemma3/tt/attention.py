@@ -520,58 +520,33 @@ class Attention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
 
-        attention_mask = ttnn.to_torch(causal_mask)
-
-        c = ttnn.to_torch(current_pos)
-        values = ttnn.to_torch(values).to(torch.bfloat16)
-        q_heads_1BQD = ttnn.to_torch(q_heads_1BQD).to(torch.bfloat16)
-        keys = ttnn.to_torch(keys).to(torch.bfloat16)
-        slice_keys = keys[:, :, :c, :]
-        slice_values = values[:, :, :c, :]
-        attention_mask = attention_mask[:, :, :, :c]
-        attention_mask = attention_mask.transpose(1, 2)
-        torch_attn_output_1G4D = torch.nn.functional.scaled_dot_product_attention(
-            q_heads_1BQD,
-            slice_keys,  # Use the sliced tensor
-            slice_values,
-            attn_mask=attention_mask,  # Use the sliced tensor
-            scale=self.scale,
-            is_causal=False,  # is_causal=False because Q has seqlen=1, no masking needed
-            dropout_p=0.0,
-        )
-
-        attn_output_1G4D = ttnn.from_torch(
-            torch_attn_output_1G4D, dtype=ttnn.bfloat16, device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-        )
-        q_heads_1BQD = ttnn.from_torch(
-            q_heads_1BQD, dtype=ttnn.bfloat16, device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-        )
-
-        # if page_table:
-        #     attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-        #         q_heads_1BQD,
-        #         keys,
-        #         values,
-        #         cur_pos_tensor=current_pos,
-        #         page_table_tensor=page_table,
-        #         scale=self.scale,
-        #         program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-        #         compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-        #         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        #     )
-        # else:
-        #     attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
-        #         q_heads_1BQD,
-        #         keys,
-        #         values,
-        #         cur_pos_tensor=current_pos,
-        #         scale=self.scale,
-        #         # attn_mask=attn_mask,
-        #         # is_causal=False,
-        #         program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-        #         compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
-        #         memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
-        #     )
+        if page_table:
+            attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q_heads_1BQD,
+                keys,
+                values,
+                cur_pos_tensor=current_pos,
+                page_table_tensor=page_table,
+                scale=self.scale,
+                attn_mask=causal_mask,
+                is_causal=False,
+                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
+                q_heads_1BQD,
+                keys,
+                values,
+                cur_pos_tensor=current_pos,
+                scale=self.scale,
+                attn_mask=causal_mask,
+                is_causal=False,
+                program_config=self.model_config["SDPA_DECODE_PROGCFG"],
+                compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
+            )
 
         ttnn.deallocate(q_heads_1BQD)
 
