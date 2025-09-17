@@ -270,12 +270,26 @@ class Gemma3Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
         attn_mask = torch.ones(S + 1).unsqueeze(0)
-        cache_postion = torch.arange(S).unsqueeze(0)
+        cache_postion = torch.arange(S)
         attention_mask = [
             create_sliding_window_causal_mask(
-                tokens_embd, attn_mask, cache_postion, self.args, self.paged_attention_config
+                tokens_embd,
+                attn_mask,
+                cache_postion,
+                self.args,
+                self.paged_attention_config,
+                device=self.mesh_device,
+                mode="prefill",
             ),
-            create_causal_mask(tokens_embd, attn_mask, cache_postion, self.args, self.paged_attention_config),
+            create_causal_mask(
+                tokens_embd,
+                attn_mask,
+                cache_postion,
+                self.args,
+                self.paged_attention_config,
+                device=self.mesh_device,
+                mode="prefill",
+            ),
         ]
         return (
             tokens_embd,
@@ -350,8 +364,12 @@ class Gemma3Transformer(LightweightModule):
         attn_mask = torch.ones(current_pos + 1).unsqueeze(0)
 
         attention_mask = [
-            create_sliding_window_causal_mask(tokens, attn_mask, current_pos, self.args, self.paged_attention_config),
-            create_causal_mask(tokens, attn_mask, current_pos, self.args, self.paged_attention_config),
+            create_sliding_window_causal_mask(
+                tokens, attn_mask, current_pos, self.args, self.paged_attention_config, device=None, mode="decode"
+            ),
+            create_causal_mask(
+                tokens, attn_mask, current_pos, self.args, self.paged_attention_config, device=None, mode="decode"
+            ),
         ]
 
         return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table, attention_mask

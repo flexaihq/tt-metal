@@ -791,22 +791,25 @@ def convert_attn_mask(mask: torch.Tensor) -> torch.Tensor:
     return torch.where(mask, torch.tensor(0.0, dtype=torch.float32), torch.finfo(torch.float32).min)
 
 
-def create_causal_mask(input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None):
-    layer_idx = 0
-
-    n_local_kv_heads = args.n_kv_heads // args.num_devices
+def create_causal_mask(
+    input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None, device=None, mode="decode"
+):
     if PagedAttentionConfig is not None:
-        max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+        if mode == "prefill":
+            max_seq_len = cache_position[-1].item() + 1
+        else:
+            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
     else:
         max_seq_len = args.max_seq_len
+
     early_exit, attention_mask, kv_length, kv_offset = _preprocess_mask_arguments(
         attention_mask, cache_position, max_seq_len
     )
-    batch_size, dtype = args.max_batch_size, input_embeds.dtype
+    dtype = input_embeds.dtype
     mask_factory_function = causal_mask_function
 
     causal_mask = sdpa_mask_recent_torch(
-        batch_size=args.max_batch_size,
+        batch_size=1,
         cache_position=cache_position,
         kv_length=kv_length,
         kv_offset=kv_offset,
@@ -815,12 +818,15 @@ def create_causal_mask(input_embeds, attention_mask, cache_position, args, Paged
         dtype=dtype,
     )
     causal_mask = convert_attn_mask(causal_mask)
-    causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
+    if mode == "decode":
+        causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
 
     causal_mask = ttnn.as_tensor(
         causal_mask,
         dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
     )
 
@@ -846,21 +852,25 @@ def sliding_window_causal_mask_function(sliding_window: int) -> Callable:
     return and_masks(sliding_window_overlay(sliding_window), causal_mask_function)
 
 
-def create_sliding_window_causal_mask(input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None):
-    layer_idx = 0
-
+def create_sliding_window_causal_mask(
+    input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None, device=None, mode="decode"
+):
     n_local_kv_heads = args.n_kv_heads // args.num_devices
     if PagedAttentionConfig is not None:
-        max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+        if mode == "prefill":
+            max_seq_len = cache_position[-1].item() + 1
+        else:
+            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
     else:
         max_seq_len = args.max_seq_len
 
+    attention_mask = attention_mask.repeat_interleave(1, 0)
     early_exit, attention_mask, kv_length, kv_offset = _preprocess_mask_arguments(
         attention_mask, cache_position, max_seq_len
     )
     sliding_window = args.sliding_window
 
-    batch_size, dtype = args.max_batch_size, input_embeds.dtype
+    dtype = input_embeds.dtype
     mask_factory_function = sliding_window_causal_mask_function(sliding_window)
     mask_interface = sdpa_mask_recent_torch
 
@@ -870,7 +880,7 @@ def create_sliding_window_causal_mask(input_embeds, attention_mask, cache_positi
 
     # We now create the mask
     causal_mask = mask_interface(
-        batch_size=args.max_batch_size,
+        batch_size=1,
         cache_position=cache_position,
         kv_length=kv_length,
         kv_offset=kv_offset,
@@ -880,12 +890,15 @@ def create_sliding_window_causal_mask(input_embeds, attention_mask, cache_positi
     )
     causal_mask = convert_attn_mask(causal_mask)
 
-    causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
+    if mode == "decode":
+        causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
 
     causal_mask = ttnn.as_tensor(
         causal_mask,
         dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
     )
     return causal_mask
