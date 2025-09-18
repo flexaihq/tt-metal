@@ -800,7 +800,7 @@ def create_causal_mask(
     else:
         batch_size = args.max_batch_size
         if PagedAttentionConfig is not None:
-            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+            max_seq_len = (PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size) // batch_size
         else:
             max_seq_len = args.max_seq_len
 
@@ -823,14 +823,6 @@ def create_causal_mask(
     if mode == "decode":
         causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
 
-    # if mode=="decode":
-    #     pos = cache_position.item()
-
-    #     torch.save(causal_mask[0,:,:,:], f"ttnn_attn_mask/causal_mask_{pos}_0.pt")
-    #     torch.save(causal_mask[1,:,:,:], f"ttnn_attn_mask/causal_mask_{pos}_1.pt")
-    #     torch.save(causal_mask[2,:,:,:], f"ttnn_attn_mask/causal_mask_{pos}_2.pt")
-    #     torch.save(causal_mask[3,:,:,:], f"ttnn_attn_mask/causal_mask_{pos}_3.pt")
-
     causal_mask = ttnn.as_tensor(
         causal_mask,
         dtype=ttnn.bfloat4_b,
@@ -839,8 +831,6 @@ def create_causal_mask(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
     )
-    print("causal_mask ", causal_mask)
-    print("causal_mask ", causal_mask.shape)
     return causal_mask
 
 
@@ -872,7 +862,7 @@ def create_sliding_window_causal_mask(
     else:
         batch_size = args.max_batch_size
         if PagedAttentionConfig is not None:
-            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+            max_seq_len = (PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size) // batch_size
         else:
             max_seq_len = args.max_seq_len
 
@@ -913,5 +903,4 @@ def create_sliding_window_causal_mask(
         mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
     )
 
-    print("causal_mask ", causal_mask.shape)
     return causal_mask

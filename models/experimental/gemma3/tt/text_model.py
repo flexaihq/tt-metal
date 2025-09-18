@@ -370,7 +370,7 @@ class Gemma3Transformer(LightweightModule):
             attn_mask[i, : length + 1] = 1
 
         current_pos = torch.tensor([max_len - 1])
-        print("current pos ", current_pos)
+
         attention_mask = [
             create_sliding_window_causal_mask(
                 tokens,
