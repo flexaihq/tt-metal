@@ -361,14 +361,34 @@ class Gemma3Transformer(LightweightModule):
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
-        attn_mask = torch.ones(current_pos + 1).unsqueeze(0)
+        batch_size = current_pos.size(0)
+        max_len = current_pos.max().item() + 1  # longest seq length (+1 since pos starts at 0)
 
+        # Initialize with zeros
+        attn_mask = torch.zeros(batch_size, max_len, dtype=torch.long)
+        for i, length in enumerate(current_pos.tolist()):
+            attn_mask[i, : length + 1] = 1
+
+        current_pos = torch.tensor([max_len - 1])
+        print("current pos ", current_pos)
         attention_mask = [
             create_sliding_window_causal_mask(
-                tokens, attn_mask, current_pos, self.args, self.paged_attention_config, device=None, mode="decode"
+                tokens,
+                attn_mask,
+                current_pos,
+                self.args,
+                self.paged_attention_config,
+                device=self.mesh_device,
+                mode="decode",
             ),
             create_causal_mask(
-                tokens, attn_mask, current_pos, self.args, self.paged_attention_config, device=None, mode="decode"
+                tokens,
+                attn_mask,
+                current_pos,
+                self.args,
+                self.paged_attention_config,
+                device=self.mesh_device,
+                mode="decode",
             ),
         ]
 
@@ -416,7 +436,7 @@ class Gemma3Transformer(LightweightModule):
                     dims=(3, 1) if self.args.is_galaxy else (1, -1),
                     mesh_shape=self.args.cluster_shape,
                 ),
-            )[0, 0, 0, :B]
+            )[0, 0, :B, 0]
             return tt_out
 
         if self.args.num_devices > 1:
@@ -567,9 +587,13 @@ class Gemma3Transformer(LightweightModule):
                 x = ttnn.typecast(x, activation_dtype)
 
             causal_mask = (
-                attention_masks[0]
-                if (hasattr(layer.attention, "is_sliding") and layer.attention.is_sliding)
-                else attention_masks[1]
+                (
+                    attention_masks[0]
+                    if (hasattr(layer.attention, "is_sliding") and layer.attention.is_sliding)
+                    else attention_masks[1]
+                )
+                if attention_masks is not None
+                else None
             )
 
             x = layer(

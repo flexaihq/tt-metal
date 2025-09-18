@@ -755,7 +755,6 @@ def sdpa_mask_recent_torch(
     q_length = cache_position.shape[0]
 
     padding_mask = prepare_padding_mask(attention_mask, kv_length, kv_offset, _slice=False)
-
     kv_arange = torch.arange(kv_length)
     kv_arange += kv_offset
 
@@ -794,13 +793,16 @@ def convert_attn_mask(mask: torch.Tensor) -> torch.Tensor:
 def create_causal_mask(
     input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None, device=None, mode="decode"
 ):
-    if PagedAttentionConfig is not None:
-        if mode == "prefill":
-            max_seq_len = cache_position[-1].item() + 1
-        else:
-            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+    if mode == "prefill":
+        max_seq_len = cache_position[-1].item() + 1
+        batch_size = 1
+
     else:
-        max_seq_len = args.max_seq_len
+        batch_size = args.max_batch_size
+        if PagedAttentionConfig is not None:
+            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+        else:
+            max_seq_len = args.max_seq_len
 
     early_exit, attention_mask, kv_length, kv_offset = _preprocess_mask_arguments(
         attention_mask, cache_position, max_seq_len
@@ -809,7 +811,7 @@ def create_causal_mask(
     mask_factory_function = causal_mask_function
 
     causal_mask = sdpa_mask_recent_torch(
-        batch_size=1,
+        batch_size=batch_size,
         cache_position=cache_position,
         kv_length=kv_length,
         kv_offset=kv_offset,
@@ -821,15 +823,24 @@ def create_causal_mask(
     if mode == "decode":
         causal_mask = causal_mask.repeat_interleave(args.n_heads, 1).transpose(1, 2)
 
+    # if mode=="decode":
+    #     pos = cache_position.item()
+
+    #     torch.save(causal_mask[0,:,:,:], f"ttnn_attn_mask/causal_mask_{pos}_0.pt")
+    #     torch.save(causal_mask[1,:,:,:], f"ttnn_attn_mask/causal_mask_{pos}_1.pt")
+    #     torch.save(causal_mask[2,:,:,:], f"ttnn_attn_mask/causal_mask_{pos}_2.pt")
+    #     torch.save(causal_mask[3,:,:,:], f"ttnn_attn_mask/causal_mask_{pos}_3.pt")
+
     causal_mask = ttnn.as_tensor(
         causal_mask,
         dtype=ttnn.bfloat4_b,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
     )
-
+    print("causal_mask ", causal_mask)
+    print("causal_mask ", causal_mask.shape)
     return causal_mask
 
 
@@ -855,16 +866,16 @@ def sliding_window_causal_mask_function(sliding_window: int) -> Callable:
 def create_sliding_window_causal_mask(
     input_embeds, attention_mask, cache_position, args, PagedAttentionConfig=None, device=None, mode="decode"
 ):
-    n_local_kv_heads = args.n_kv_heads // args.num_devices
-    if PagedAttentionConfig is not None:
-        if mode == "prefill":
-            max_seq_len = cache_position[-1].item() + 1
-        else:
-            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+    if mode == "prefill":
+        batch_size = 1
+        max_seq_len = cache_position[-1].item() + 1
     else:
-        max_seq_len = args.max_seq_len
+        batch_size = args.max_batch_size
+        if PagedAttentionConfig is not None:
+            max_seq_len = PagedAttentionConfig.max_num_blocks * PagedAttentionConfig.block_size
+        else:
+            max_seq_len = args.max_seq_len
 
-    attention_mask = attention_mask.repeat_interleave(1, 0)
     early_exit, attention_mask, kv_length, kv_offset = _preprocess_mask_arguments(
         attention_mask, cache_position, max_seq_len
     )
@@ -880,7 +891,7 @@ def create_sliding_window_causal_mask(
 
     # We now create the mask
     causal_mask = mask_interface(
-        batch_size=1,
+        batch_size=batch_size,
         cache_position=cache_position,
         kv_length=kv_length,
         kv_offset=kv_offset,
@@ -899,6 +910,8 @@ def create_sliding_window_causal_mask(
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
     )
+
+    print("causal_mask ", causal_mask.shape)
     return causal_mask
