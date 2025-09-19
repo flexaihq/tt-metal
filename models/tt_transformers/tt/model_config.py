@@ -1497,6 +1497,7 @@ class ModelArgs:
 
     def _set_model_specific_params(self):
         # Gemma3 specific params
+        self.attention_mask = False
         is_gemma3 = "gemma-3" in self.base_model_name.lower()
         if is_gemma3:
             self.rms_norm_add_unit_offset = True
