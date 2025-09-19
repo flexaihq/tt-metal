@@ -9,7 +9,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import copy_host_to_device
+from models.tt_transformers.tt.common import copy_host_to_device, create_causal_mask, create_sliding_window_causal_mask
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
@@ -32,6 +32,7 @@ class Transformer(LightweightModule):
         rope_setup_class=None,
     ):
         super().__init__()
+        self.paged_attention_config = paged_attention_config
         self.args = args
         self.vocab_size = args.vocab_size
         assert self.vocab_size > 0
@@ -187,14 +188,38 @@ class Transformer(LightweightModule):
             )
         else:
             tt_chunk_page_table = None
-
+        if self.args.attention_mask:
+            attn_mask = torch.ones(S + 1).unsqueeze(0)
+            cache_postion = torch.arange(S)
+            attention_mask = [
+                create_sliding_window_causal_mask(
+                    tokens_embd,
+                    attn_mask,
+                    cache_postion,
+                    self.args,
+                    self.paged_attention_config,
+                    device=self.mesh_device,
+                    mode="prefill",
+                ),
+                create_causal_mask(
+                    tokens_embd,
+                    attn_mask,
+                    cache_postion,
+                    self.args,
+                    self.paged_attention_config,
+                    device=self.mesh_device,
+                    mode="prefill",
+                ),
+            ]
+        else:
+            attention_mask = None
         return (
             tokens_embd,
             tt_rot_mats_prefill_global,
             tt_rot_mats_prefill_local,
             tt_page_table,
             tt_chunk_page_table,
-            None,
+            attention_mask,
         )
 
     def prepare_inputs_decode(self, *inputs):
@@ -258,7 +283,41 @@ class Transformer(LightweightModule):
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
-        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table, None
+        if self.args.attention_mask:
+            batch_size = current_pos.size(0)
+            max_len = current_pos.max().item() + 1  # longest seq length (+1 since pos starts at 0)
+
+            # Initialize with zeros
+            attn_mask = torch.zeros(batch_size, max_len, dtype=torch.long)
+            for i, length in enumerate(current_pos.tolist()):
+                attn_mask[i, : length + 1] = 1
+
+            current_pos = torch.tensor([max_len - 1])
+
+            attention_mask = [
+                create_sliding_window_causal_mask(
+                    tokens,
+                    attn_mask,
+                    current_pos,
+                    self.args,
+                    self.paged_attention_config,
+                    device=self.mesh_device,
+                    mode="decode",
+                ),
+                create_causal_mask(
+                    tokens,
+                    attn_mask,
+                    current_pos,
+                    self.args,
+                    self.paged_attention_config,
+                    device=self.mesh_device,
+                    mode="decode",
+                ),
+            ]
+        else:
+            attention_mask = None
+
+        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table, attention_mask
 
     def _transform_decode_inputs_device(self, tokens):
         """
@@ -324,6 +383,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        attention_masks=None,
         **kwargs,
     ):
         """
@@ -342,6 +402,7 @@ class Transformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
+            attention_masks=attention_masks,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs_global, rot_mat_idxs_local):
@@ -369,6 +430,7 @@ class Transformer(LightweightModule):
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
+        attention_masks=None,
         **kwargs,
     ):
         """
@@ -388,6 +450,7 @@ class Transformer(LightweightModule):
             rot_mats_local=rot_mats_local,
             mode="decode",
             page_table=page_table,
+            attention_masks=attention_masks,
             kv_cache=kv_cache,
         )
 
@@ -439,6 +502,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
+        attention_masks=None,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -449,7 +513,16 @@ class Transformer(LightweightModule):
                 x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"], activation_dtype)
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
-
+            causal_mask = (
+                (
+                    attention_masks[0]
+                    if (hasattr(layer.attention, "is_sliding") and layer.attention.is_sliding)
+                    else attention_masks[1]
+                )
+                if attention_masks is not None
+                else None
+            )
+            is_causal = False if causal_mask is not None else True
             x = layer(
                 x,
                 current_pos,
@@ -461,6 +534,8 @@ class Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
+                causal_mask=causal_mask,
+                is_causal=is_causal,
             )
 
         if mode == "prefill" and get_last_token == -1:

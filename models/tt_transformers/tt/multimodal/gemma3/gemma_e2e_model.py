@@ -1,4 +1,7 @@
+import torch
+
 import ttnn
+from models.tt_transformers.tt.common import create_causal_mask, create_sliding_window_causal_mask
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.multimodal.gemma3.gemma_vision_model import TtGemmaTransformerVision
 
@@ -109,8 +112,39 @@ class TtGemmaModel(Transformer):
             )
         else:
             tt_chunk_page_table = None
-
-        return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
+        if self.args.attention_mask:
+            attn_mask = torch.ones(S + 1).unsqueeze(0)
+            cache_postion = torch.arange(S)
+            attention_mask = [
+                create_sliding_window_causal_mask(
+                    tokens_embd,
+                    attn_mask,
+                    cache_postion,
+                    self.args,
+                    self.paged_attention_config,
+                    device=self.mesh_device,
+                    mode="prefill",
+                ),
+                create_causal_mask(
+                    tokens_embd,
+                    attn_mask,
+                    cache_postion,
+                    self.args,
+                    self.paged_attention_config,
+                    device=self.mesh_device,
+                    mode="prefill",
+                ),
+            ]
+        else:
+            attention_mask = None
+        return (
+            tokens_embd,
+            tt_rot_mats_prefill_global,
+            tt_rot_mats_prefill_local,
+            tt_page_table,
+            tt_chunk_page_table,
+            attention_mask,
+        )
 
     def compute_vision_token(self, pixel_values=None):
         if pixel_values is None:
