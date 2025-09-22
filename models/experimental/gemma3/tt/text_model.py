@@ -501,9 +501,9 @@ class Gemma3Transformer(LightweightModule):
         rot_mat_idxs_global=None,
         rot_mat_idxs_local=None,
         page_table=None,
+        attention_masks=None,
         kv_cache=None,
         argmax_on_device=False,
-        attention_masks=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
