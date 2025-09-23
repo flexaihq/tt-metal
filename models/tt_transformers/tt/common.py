@@ -429,7 +429,14 @@ def copy_host_to_device(
             if host_tensors[i] is None:
                 assert device_tensors[i] is None
                 continue
-            ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
+            if isinstance(host_tensors[i], list):
+                # handle list of tensors
+                for j, ht in enumerate(host_tensors[i]):
+                    assert isinstance(device_tensors[i], list), "device_tensors[i] must also be a list"
+                    ttnn.copy_host_to_device_tensor(ht, device_tensors[i][j])
+            else:
+                # handle single tensor
+                ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
         return device_tensors
 
 
@@ -828,10 +835,7 @@ def create_causal_mask(
             causal_mask,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
-            # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
         )
     else:
         causal_mask = ttnn.as_tensor(
@@ -840,8 +844,6 @@ def create_causal_mask(
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
-            # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
         )
 
     return causal_mask
@@ -913,10 +915,7 @@ def create_sliding_window_causal_mask(
             causal_mask,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
-            # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
         )
     else:
         causal_mask = ttnn.as_tensor(
@@ -925,7 +924,5 @@ def create_sliding_window_causal_mask(
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # mesh_mapper=ttnn.ShardTensorToMesh(device, dim=2),
-            # mesh_mapper=replicate_tensor_to_mesh_mapper(self.device),
         )
     return causal_mask
