@@ -391,6 +391,7 @@ class Transformer(LightweightModule):
         rot_mat_idxs_global=None,
         rot_mat_idxs_local=None,
         page_table=None,
+        attention_masks=None,
         kv_cache=None,
         argmax_on_device=False,
     ):
