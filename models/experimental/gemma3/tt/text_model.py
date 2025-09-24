@@ -21,7 +21,7 @@ from tqdm import tqdm
 import torch
 from models.experimental.gemma3.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
-from models.tt_transformers.tt.common import copy_host_to_device, create_causal_mask, create_sliding_window_causal_mask
+from models.tt_transformers.tt.common import copy_host_to_device, get_decode_mask
 from models.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -38,6 +38,7 @@ class Gemma3Transformer(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
+        attn_mask=None,
     ):
         super().__init__()
         self.args = args
@@ -135,10 +136,35 @@ class Gemma3Transformer(LightweightModule):
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
-            max_columns_per_device=args.max_columns_per_device_lm_head,
+            max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
         self.host_embed = self.args.reference_embedding()
+
+        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
+            # We are using sliding window attention in this model. We can create a custom attention mask to apply the sliding attention
+            # First we create the mask for all decode positions on host [bsz, n_heads_per_device, seq_len, seq_len]
+            self.decode_sliding_mask_mat = get_decode_mask(
+                self.args,
+                self.mesh_device,
+                paged_attention_config=paged_attention_config,
+            )
+            # Then we copy a slice for a single decode position for each user on to device [bsz, n_heads_per_device, 1, seq_len]
+            # We can update this tensor on host each iteration and copy to device to save storing the large square tensor on device
+            self.device_decode_sliding_mask = ttnn.as_tensor(
+                torch.concat(
+                    [self.decode_sliding_mask_mat[i, :, 0:1, :].unsqueeze(0) for i in range(self.args.max_batch_size)],
+                    axis=0,
+                ).transpose(1, 2),
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            self.decode_sliding_mask_mat = None
+            self.device_decode_sliding_mask = None
 
     def setup_cache(self, max_batch_size):
         self.cache_is_setup = True
@@ -269,35 +295,13 @@ class Gemma3Transformer(LightweightModule):
             )
         else:
             tt_chunk_page_table = None
-        attn_mask = torch.ones(S + 1).unsqueeze(0)
-        cache_postion = torch.arange(S)
-        attention_mask = [
-            create_sliding_window_causal_mask(
-                tokens_embd,
-                attn_mask,
-                cache_postion,
-                self.args,
-                self.paged_attention_config,
-                device=self.mesh_device,
-                mode="prefill",
-            ),
-            create_causal_mask(
-                tokens_embd,
-                attn_mask,
-                cache_postion,
-                self.args,
-                self.paged_attention_config,
-                device=self.mesh_device,
-                mode="prefill",
-            ),
-        ]
+
         return (
             tokens_embd,
             tt_rot_mats_prefill_global,
             tt_rot_mats_prefill_local,
             tt_page_table,
             tt_chunk_page_table,
-            attention_mask,
         )
 
     def prepare_inputs_decode(self, *inputs):
@@ -361,38 +365,8 @@ class Gemma3Transformer(LightweightModule):
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
-        batch_size = current_pos.size(0)
-        max_len = current_pos.max().item() + 1  # longest seq length (+1 since pos starts at 0)
 
-        # Initialize with zeros
-        attn_mask = torch.zeros(batch_size, max_len, dtype=torch.long)
-        for i, length in enumerate(current_pos.tolist()):
-            attn_mask[i, : length + 1] = 1
-
-        current_pos = torch.tensor([max_len - 1])
-
-        attention_mask = [
-            create_sliding_window_causal_mask(
-                tokens,
-                attn_mask,
-                current_pos,
-                self.args,
-                self.paged_attention_config,
-                device=self.mesh_device,
-                mode="decode",
-            ),
-            create_causal_mask(
-                tokens,
-                attn_mask,
-                current_pos,
-                self.args,
-                self.paged_attention_config,
-                device=self.mesh_device,
-                mode="decode",
-            ),
-        ]
-
-        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table, attention_mask
+        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table
 
     def _transform_decode_inputs_device(self, tokens):
         """
@@ -457,12 +431,23 @@ class Gemma3Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        attention_masks=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
+            mask = torch.triu(torch.full((1, 1, x.shape[-2], x.shape[-2]), -float("inf")), diagonal=1)
+            sliding_mask = mask + torch.tril(
+                torch.full((1, 1, x.shape[-2], x.shape[-2]), -float("inf")),
+                diagonal=-self.args.sliding_window,
+            )
+            sliding_attn_mask = ttnn.from_torch(
+                sliding_mask, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            )
+        else:
+            sliding_attn_mask = None
+
         return self.forward(
             x,
             current_pos=None,
@@ -475,7 +460,7 @@ class Gemma3Transformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
-            attention_masks=attention_masks,
+            sliding_attn_mask=sliding_attn_mask,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs_global, rot_mat_idxs_local):
@@ -494,6 +479,24 @@ class Gemma3Transformer(LightweightModule):
         if rot_mat_idxs_local is not None:
             ttnn.plus_one(rot_mat_idxs_local)
 
+    def update_attention_masks(self, current_pos):
+        torch_mask = torch.concat(
+            [
+                self.decode_sliding_mask_mat[i, :, current_pos[i].item() : current_pos[i].item() + 1, :].unsqueeze(0)
+                for i in range(self.decode_sliding_mask_mat.shape[0])
+            ],
+            axis=0,
+        ).transpose(1, 2)
+        sliding_window_causal_mask = ttnn.as_tensor(
+            torch_mask,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(sliding_window_causal_mask, self.device_decode_sliding_mask)
+
     def ttnn_decode_forward(
         self,
         x,
@@ -501,7 +504,6 @@ class Gemma3Transformer(LightweightModule):
         rot_mat_idxs_global=None,
         rot_mat_idxs_local=None,
         page_table=None,
-        attention_masks=None,
         kv_cache=None,
         argmax_on_device=False,
     ):
@@ -523,7 +525,7 @@ class Gemma3Transformer(LightweightModule):
             mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,
-            attention_masks=attention_masks,
+            sliding_attn_mask=self.device_decode_sliding_mask,
         )
 
         # Gather the output across all devices and untilize the tensor (for argmax)
@@ -574,7 +576,7 @@ class Gemma3Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        attention_masks=None,
+        sliding_attn_mask=None,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -586,15 +588,14 @@ class Gemma3Transformer(LightweightModule):
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
-            causal_mask = (
-                (
-                    attention_masks[0]
+            if sliding_attn_mask is not None:
+                attn_mask_i = (
+                    sliding_attn_mask
                     if (hasattr(layer.attention, "is_sliding") and layer.attention.is_sliding)
-                    else attention_masks[1]
+                    else None
                 )
-                if attention_masks is not None
-                else None
-            )
+            else:
+                attn_mask_i = None
 
             x = layer(
                 x,
@@ -607,7 +608,7 @@ class Gemma3Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
-                causal_mask=causal_mask,
+                attn_mask=attn_mask_i,
             )
 
         if mode == "prefill" and get_last_token == -1:
@@ -626,6 +627,6 @@ class Gemma3Transformer(LightweightModule):
         x = self.lm_head(x)
 
         if mode == "prefill":
-            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x

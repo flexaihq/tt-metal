@@ -1521,7 +1521,7 @@ class ModelArgs:
         self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
-
+        self.sliding_window = text_config.get("sliding_window", None)
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
