@@ -9,7 +9,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import copy_host_to_device, create_causal_mask, create_sliding_window_causal_mask
+from models.tt_transformers.tt.common import copy_host_to_device, get_decode_mask
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
@@ -30,6 +30,7 @@ class Transformer(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
+        attn_mask=None,
     ):
         super().__init__()
         self.paged_attention_config = paged_attention_config
@@ -129,6 +130,31 @@ class Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
+        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
+            # We are using sliding window attention in this model. We can create a custom attention mask to apply the sliding attention
+            # First we create the mask for all decode positions on host [bsz, n_heads_per_device, seq_len, seq_len]
+            self.decode_sliding_mask_mat = get_decode_mask(
+                self.args,
+                self.mesh_device,
+                paged_attention_config=paged_attention_config,
+            )
+            # Then we copy a slice for a single decode position for each user on to device [bsz, n_heads_per_device, 1, seq_len]
+            # We can update this tensor on host each iteration and copy to device to save storing the large square tensor on device
+            self.device_decode_sliding_mask = ttnn.as_tensor(
+                torch.concat(
+                    [self.decode_sliding_mask_mat[i, :, 0:1, :].unsqueeze(0) for i in range(self.args.max_batch_size)],
+                    axis=0,
+                ).transpose(1, 2),
+                dtype=ttnn.bfloat4_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            self.decode_sliding_mask_mat = None
+            self.device_decode_sliding_mask = None
+
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -219,6 +245,7 @@ class Transformer(LightweightModule):
             tt_rot_mats_prefill_local,
             tt_page_table,
             tt_chunk_page_table,
+            attention_mask,
         )
 
     def prepare_inputs_decode(self, *inputs):
@@ -282,7 +309,41 @@ class Transformer(LightweightModule):
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
-        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table
+        if self.args.attention_mask:
+            batch_size = current_pos.size(0)
+            max_len = current_pos.max().item() + 1  # longest seq length (+1 since pos starts at 0)
+
+            # Initialize with zeros
+            attn_mask = torch.zeros(batch_size, max_len, dtype=torch.long)
+            for i, length in enumerate(current_pos.tolist()):
+                attn_mask[i, : length + 1] = 1
+
+            current_pos = torch.tensor([max_len - 1])
+
+            attention_mask = [
+                create_sliding_window_causal_mask(
+                    tokens,
+                    attn_mask,
+                    current_pos,
+                    self.args,
+                    self.paged_attention_config,
+                    device=self.mesh_device,
+                    mode="decode",
+                ),
+                create_causal_mask(
+                    tokens,
+                    attn_mask,
+                    current_pos,
+                    self.args,
+                    self.paged_attention_config,
+                    device=self.mesh_device,
+                    mode="decode",
+                ),
+            ]
+        else:
+            attention_mask = None
+
+        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table, attention_mask
 
     def _transform_decode_inputs_device(self, tokens):
         """
@@ -353,6 +414,17 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
+            mask = torch.triu(torch.full((1, 1, x.shape[-2], x.shape[-2]), -float("inf")), diagonal=1)
+            sliding_mask = mask + torch.tril(
+                torch.full((1, 1, x.shape[-2], x.shape[-2]), -float("inf")),
+                diagonal=-self.args.sliding_window,
+            )
+            sliding_attn_mask = ttnn.from_torch(
+                sliding_mask, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            )
+        else:
+            sliding_attn_mask = None
         return self.forward(
             x,
             current_pos=None,
@@ -365,7 +437,7 @@ class Transformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
-            attention_masks=attention_masks,
+            sliding_attn_mask=sliding_attn_mask,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs_global, rot_mat_idxs_local):
@@ -384,6 +456,24 @@ class Transformer(LightweightModule):
         if rot_mat_idxs_local is not None:
             ttnn.plus_one(rot_mat_idxs_local)
 
+    def update_attention_masks(self, current_pos):
+        torch_mask = torch.concat(
+            [
+                self.decode_sliding_mask_mat[i, :, current_pos[i].item() : current_pos[i].item() + 1, :].unsqueeze(0)
+                for i in range(self.decode_sliding_mask_mat.shape[0])
+            ],
+            axis=0,
+        ).transpose(1, 2)
+        sliding_window_causal_mask = ttnn.as_tensor(
+            torch_mask,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(sliding_window_causal_mask, self.device_decode_sliding_mask)
+
     def ttnn_decode_forward(
         self,
         x,
@@ -391,7 +481,6 @@ class Transformer(LightweightModule):
         rot_mat_idxs_global=None,
         rot_mat_idxs_local=None,
         page_table=None,
-        attention_masks=None,
         kv_cache=None,
         argmax_on_device=False,
     ):
@@ -412,8 +501,8 @@ class Transformer(LightweightModule):
             rot_mats_local=rot_mats_local,
             mode="decode",
             page_table=page_table,
-            attention_masks=attention_masks,
             kv_cache=kv_cache,
+            sliding_attn_mask=self.device_decode_sliding_mask,
         )
 
         # Gather the output across all devices and untilize the tensor (for argmax)
@@ -464,7 +553,7 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        attention_masks=None,
+        sliding_attn_mask=None,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -475,16 +564,15 @@ class Transformer(LightweightModule):
                 x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"], activation_dtype)
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
-            causal_mask = (
-                (
-                    attention_masks[0]
+
+            if sliding_attn_mask is not None:
+                attn_mask_i = (
+                    sliding_attn_mask
                     if (hasattr(layer.attention, "is_sliding") and layer.attention.is_sliding)
-                    else attention_masks[1]
+                    else None
                 )
-                if attention_masks is not None
-                else None
-            )
-            is_causal = False if causal_mask is not None else True
+            else:
+                attn_mask_i = None
             x = layer(
                 x,
                 current_pos,
@@ -496,8 +584,7 @@ class Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
-                causal_mask=causal_mask,
-                is_causal=is_causal,
+                attn_mask=attn_mask_i,
             )
 
         if mode == "prefill" and get_last_token == -1:
