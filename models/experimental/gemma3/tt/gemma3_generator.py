@@ -182,6 +182,7 @@ class Gemma3Generator:
                     chunk_start_idx=chunk_start,
                     get_last_token=(last_token_idx_in_chunk // 32) * 32,
                     kv_cache=kv_cache,
+                    **kwargs,
                 )
 
                 if chunk_start == last_chunk_start:
@@ -270,7 +271,6 @@ class Gemma3Generator:
         tt_rot_mat_idxs_global = []
         tt_rot_mat_idxs_local = []
         tt_page_table = []
-
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
             model_i = self.model[i]
@@ -286,6 +286,12 @@ class Gemma3Generator:
             tt_rot_mat_idxs_global.append(tt_rot_mat_idxs_global_i)
             tt_rot_mat_idxs_local.append(tt_rot_mat_idxs_local_i)
             tt_page_table.append(tt_page_table_i)
+
+            if (
+                hasattr(self.model[i], "device_decode_sliding_mask")
+                and self.model[i].device_decode_sliding_mask is not None
+            ):
+                self.model[i].update_attention_masks(current_pos[i])
 
         for i in range(self.data_parallel):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -381,6 +387,12 @@ class Gemma3Generator:
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_text[i],
                 )
+        for i in range(self.data_parallel):
+            if (
+                hasattr(self.model[i], "device_decode_sliding_mask")
+                and self.model[i].device_decode_sliding_mask is not None
+            ):
+                self.model[i].update_attention_masks(current_pos[i])
 
         for i, trace_id in self.trace_ids_text.items():
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
