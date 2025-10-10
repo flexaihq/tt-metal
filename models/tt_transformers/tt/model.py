@@ -194,7 +194,6 @@ class Transformer(LightweightModule):
             tt_rot_mats_prefill_local,
             tt_page_table,
             tt_chunk_page_table,
-            None,
         )
 
     def prepare_inputs_decode(self, *inputs):
@@ -258,7 +257,7 @@ class Transformer(LightweightModule):
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
-        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table, None
+        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table
 
     def _transform_decode_inputs_device(self, tokens):
         """

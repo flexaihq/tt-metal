@@ -1430,7 +1430,6 @@ class ModelArgs:
         if is_gemma3:
             self.rms_norm_add_unit_offset = True
             self.embed_scale = self.dim**0.5
-            self.sliding_window = 512
 
     def _set_params_from_dict(self, config, is_hf=False):
         eos_token_id = config.get("eos_token_id", None)
@@ -1444,7 +1443,7 @@ class ModelArgs:
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
-
+        self.sliding_window = text_config.get("sliding_window", 0)
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]

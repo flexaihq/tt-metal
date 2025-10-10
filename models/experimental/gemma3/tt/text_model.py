@@ -21,7 +21,7 @@ from tqdm import tqdm
 import torch
 from models.experimental.gemma3.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
-from models.tt_transformers.tt.common import copy_host_to_device, create_causal_mask, create_sliding_window_causal_mask
+from models.tt_transformers.tt.common import copy_host_to_device
 from models.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -269,35 +269,13 @@ class Gemma3Transformer(LightweightModule):
             )
         else:
             tt_chunk_page_table = None
-        attn_mask = torch.ones(S + 1).unsqueeze(0)
-        cache_postion = torch.arange(S)
-        attention_mask = [
-            create_sliding_window_causal_mask(
-                tokens_embd,
-                attn_mask,
-                cache_postion,
-                self.args,
-                self.paged_attention_config,
-                device=self.mesh_device,
-                mode="prefill",
-            ),
-            create_causal_mask(
-                tokens_embd,
-                attn_mask,
-                cache_postion,
-                self.args,
-                self.paged_attention_config,
-                device=self.mesh_device,
-                mode="prefill",
-            ),
-        ]
+
         return (
             tokens_embd,
             tt_rot_mats_prefill_global,
             tt_rot_mats_prefill_local,
             tt_page_table,
             tt_chunk_page_table,
-            attention_mask,
         )
 
     def prepare_inputs_decode(self, *inputs):
@@ -361,38 +339,8 @@ class Gemma3Transformer(LightweightModule):
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
-        batch_size = current_pos.size(0)
-        max_len = current_pos.max().item() + 1  # longest seq length (+1 since pos starts at 0)
 
-        # Initialize with zeros
-        attn_mask = torch.zeros(batch_size, max_len, dtype=torch.long)
-        for i, length in enumerate(current_pos.tolist()):
-            attn_mask[i, : length + 1] = 1
-
-        current_pos = torch.tensor([max_len - 1])
-
-        attention_mask = [
-            create_sliding_window_causal_mask(
-                tokens,
-                attn_mask,
-                current_pos,
-                self.args,
-                self.paged_attention_config,
-                device=self.mesh_device,
-                mode="decode",
-            ),
-            create_causal_mask(
-                tokens,
-                attn_mask,
-                current_pos,
-                self.args,
-                self.paged_attention_config,
-                device=self.mesh_device,
-                mode="decode",
-            ),
-        ]
-
-        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table, attention_mask
+        return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table
 
     def _transform_decode_inputs_device(self, tokens):
         """
@@ -457,7 +405,6 @@ class Gemma3Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        attention_masks=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -475,7 +422,6 @@ class Gemma3Transformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
-            attention_masks=attention_masks,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs_global, rot_mat_idxs_local):
@@ -501,7 +447,6 @@ class Gemma3Transformer(LightweightModule):
         rot_mat_idxs_global=None,
         rot_mat_idxs_local=None,
         page_table=None,
-        attention_masks=None,
         kv_cache=None,
         argmax_on_device=False,
     ):
@@ -523,7 +468,6 @@ class Gemma3Transformer(LightweightModule):
             mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,
-            attention_masks=attention_masks,
         )
 
         # Gather the output across all devices and untilize the tensor (for argmax)
@@ -574,7 +518,6 @@ class Gemma3Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        attention_masks=None,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -585,16 +528,6 @@ class Gemma3Transformer(LightweightModule):
                 x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"], activation_dtype)
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
-
-            causal_mask = (
-                (
-                    attention_masks[0]
-                    if (hasattr(layer.attention, "is_sliding") and layer.attention.is_sliding)
-                    else attention_masks[1]
-                )
-                if attention_masks is not None
-                else None
-            )
 
             x = layer(
                 x,
@@ -607,7 +540,6 @@ class Gemma3Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
-                causal_mask=causal_mask,
             )
 
         if mode == "prefill" and get_last_token == -1:
