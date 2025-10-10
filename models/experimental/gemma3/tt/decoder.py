@@ -184,7 +184,6 @@ class TransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-        attn_mask=None,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
@@ -210,7 +209,6 @@ class TransformerBlock(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
-            attn_mask=attn_mask,
         )
 
         hidden_states = self.ff_norm(attn_out, mode)

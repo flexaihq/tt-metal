@@ -21,7 +21,7 @@ from tqdm import tqdm
 import torch
 from models.experimental.gemma3.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
-from models.tt_transformers.tt.common import copy_host_to_device, get_decode_mask
+from models.tt_transformers.tt.common import copy_host_to_device
 from models.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import TT_CCL
 
@@ -140,31 +140,6 @@ class Gemma3Transformer(LightweightModule):
         )
 
         self.host_embed = self.args.reference_embedding()
-
-        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
-            # We are using sliding window attention in this model. We can create a custom attention mask to apply the sliding attention
-            # First we create the mask for all decode positions on host [bsz, n_heads_per_device, seq_len, seq_len]
-            self.decode_sliding_mask_mat = get_decode_mask(
-                self.args,
-                self.mesh_device,
-                paged_attention_config=paged_attention_config,
-            )
-            # Then we copy a slice for a single decode position for each user on to device [bsz, n_heads_per_device, 1, seq_len]
-            # We can update this tensor on host each iteration and copy to device to save storing the large square tensor on device
-            self.device_decode_sliding_mask = ttnn.as_tensor(
-                torch.concat(
-                    [self.decode_sliding_mask_mat[i, :, 0:1, :].unsqueeze(0) for i in range(self.args.max_batch_size)],
-                    axis=0,
-                ).transpose(1, 2),
-                dtype=ttnn.bfloat4_b,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-        else:
-            self.decode_sliding_mask_mat = None
-            self.device_decode_sliding_mask = None
 
     def setup_cache(self, max_batch_size):
         self.cache_is_setup = True
@@ -460,7 +435,6 @@ class Gemma3Transformer(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
-            sliding_attn_mask=sliding_attn_mask,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs_global, rot_mat_idxs_local):
@@ -525,7 +499,6 @@ class Gemma3Transformer(LightweightModule):
             mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,
-            sliding_attn_mask=self.device_decode_sliding_mask,
         )
 
         # Gather the output across all devices and untilize the tensor (for argmax)
@@ -576,7 +549,6 @@ class Gemma3Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        sliding_attn_mask=None,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -587,15 +559,6 @@ class Gemma3Transformer(LightweightModule):
                 x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"], activation_dtype)
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
-
-            if sliding_attn_mask is not None:
-                attn_mask_i = (
-                    sliding_attn_mask
-                    if (hasattr(layer.attention, "is_sliding") and layer.attention.is_sliding)
-                    else None
-                )
-            else:
-                attn_mask_i = None
 
             x = layer(
                 x,
@@ -608,7 +571,6 @@ class Gemma3Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
-                attn_mask=attn_mask_i,
             )
 
         if mode == "prefill" and get_last_token == -1:
