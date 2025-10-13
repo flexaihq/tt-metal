@@ -30,6 +30,8 @@ class Attention(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
+        self.layer_idx = layer_num
+        self.configuration = configuration
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
         self.TG = self.num_devices == 32
@@ -388,7 +390,6 @@ class Attention(LightweightModule):
         rot_mats=None,
         page_table=None,
         kv_cache=None,
-        attn_mask=None,
     ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
@@ -513,12 +514,11 @@ class Attention(LightweightModule):
                 values,
                 cur_pos_tensor=current_pos,
                 page_table_tensor=page_table,
-                attn_mask=attn_mask,
-                is_causal=True if attn_mask is None else False,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                sliding_window=self.configuration.sliding_window if self.is_sliding else 0,
             )
         else:
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
@@ -527,11 +527,10 @@ class Attention(LightweightModule):
                 values,
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
-                is_causal=True if attn_mask is None else False,
-                attn_mask=attn_mask,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
+                sliding_window=self.configuration.sliding_window if self.is_sliding else 0,
             )
 
         ttnn.deallocate(q_heads_1BQD)
@@ -676,7 +675,6 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-        attn_mask=None,
     ):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
@@ -831,8 +829,6 @@ class Attention(LightweightModule):
                 values_BKSD,
                 page_table,
                 chunk_start_idx,
-                attn_mask=attn_mask,
-                is_causal=True if attn_mask is None else False,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
@@ -844,8 +840,6 @@ class Attention(LightweightModule):
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
-                attn_mask=attn_mask,
-                is_causal=True if attn_mask is None else False,
             )
 
         # deallocate keys and values
@@ -924,7 +918,6 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-        attn_mask=None,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -935,7 +928,6 @@ class Attention(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
-                attn_mask=attn_mask,
             )
         else:
             return self.forward_decode(
@@ -944,7 +936,6 @@ class Attention(LightweightModule):
                 rot_mats,
                 page_table=page_table,
                 kv_cache=kv_cache,
-                attn_mask=attn_mask,
             )
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):

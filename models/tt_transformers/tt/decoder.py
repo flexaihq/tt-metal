@@ -202,7 +202,6 @@ class TransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-        attn_mask=None,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         residual = x
@@ -231,7 +230,6 @@ class TransformerBlock(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
-            attn_mask=attn_mask,
         )
         if self.pre_ff_norm == None:
             # Here x and attn_out are both fractured across devices

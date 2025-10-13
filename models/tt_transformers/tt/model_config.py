@@ -2410,7 +2410,7 @@ class ModelArgs:
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
+                tokenizer.stop_tokens = self.eos_token_id if self.eos_token_id is not None else [tokenizer.eos_token_id]
                 # Phi-3-mini uses "<|end|>" as EOS token
                 if "phi-3-mini" in self.base_model_name.lower():
                     tokenizer.stop_tokens.append(tokenizer.encode("<|end|>")[0])
