@@ -1,12 +1,11 @@
 """
 source: models/tt_transformers/tt/mlp.py
 
-This is the implementation of MLP (feed-forward) submodule of Gemma-3-4b-it.
+This is the implementation of MLP (feed-forward) submodule of Gemma3.
 
 We have re-used the MLP implementation of the TT-Transformers library with few modifications.
 This implementation has changes in Data Type (bfloat16).
 """
-
 
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
@@ -36,15 +35,15 @@ class MLP(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.args = args
+        self.num_devices = args.num_devices
         self.dim = args.dim
         self.model_config = model_config
         self.layer_num = layer_num
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
-        torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+        torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
         # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
@@ -108,7 +107,7 @@ class MLP(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
         )
         li_ff1_3_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.ACCURACY, configuration=self.args
+            decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
         )
 
         if mode == "decode":  # Sharded config
@@ -217,7 +216,7 @@ class MLP(LightweightModule):
             w1_out,
             w3_out,
             input_tensor_a_activations=[self.activation_type],
-            dtype=activation_dtype or ttnn.bfloat16,
+            dtype=activation_dtype or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
 
@@ -249,7 +248,7 @@ class MLP(LightweightModule):
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.ACCURACY, configuration=self.args
+            decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
         w2_out = ttnn.linear(
             w2_in,
@@ -261,6 +260,9 @@ class MLP(LightweightModule):
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
         ttnn.deallocate(w2_in)
+
+        w2_out = ttnn.multiply(w2_out, self.num_devices)
+
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
         w2_out_reduced = tt_all_reduce(
@@ -281,6 +283,7 @@ class MLP(LightweightModule):
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
         )
+        w2_out_reduced = ttnn.div(w2_out_reduced, self.num_devices)
 
         # Ensure dim 0 and 1 are 1
         original_shape = w2_out_reduced.shape

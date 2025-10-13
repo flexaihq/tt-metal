@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import re
 from enum import Enum
 from types import SimpleNamespace
-from typing import Optional
+from typing import Callable, Optional
 
 import torch
 from llama_models.llama3.api.datatypes import ImageMedia
@@ -248,7 +249,10 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
             chat.append({"role": "user", "content": prompt_text})
         return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
     else:
-        return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
+        output = tokenizer.apply_chat_template([prompt_text], add_generation_prompt=True, tokenize=True)
+        if len(output) == 1:
+            output = output[0]
+        return output
 
 
 def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
@@ -366,6 +370,42 @@ def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, ori
 
     rot_mats = [cos_gathereds, sin_gathereds]
     return rot_mats
+
+def compute_linear_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Linear scaling for rotary embeddings."""
+    freqs /= scale_factor
+    return freqs
+
+
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int, rope_type="llama3"):
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
+
+    if rope_type == "linear":
+        freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "llama3":
+        freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
+
+    return freqs
+
+
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, rope_type="llama3"):
+    """
+    Precompute the frequency tensor for sine and cosine values with given dimensions.
+
+    Args:
+        dim (int): Dimension of the frequency tensor.
+        end (int): End index for precomputing frequencies.
+        theta (float, optional): Scaling factor for frequency computation. Defaults to 500000.0.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Tensors containing cosine and sine values.
+    """
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end)
+    if scale_factor is not None:
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type=rope_type)
+    freqs = torch.outer(t, freqs).float()
+    return torch.cos(freqs), torch.sin(freqs)
 
 
 #  Add-Multiply method of rotary embeddings for prefill
@@ -673,7 +713,11 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    from models.tt_transformers.tt.model import Transformer
+    if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
+        from models.experimental.gemma3.tt.text_model import Gemma3Transformer as Transformer
+    else:
+        from models.tt_transformers.tt.model import Transformer
+
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(
@@ -741,7 +785,7 @@ def hf_multimodal_encode(messages, processor):
         **encoded,
         tokens=encoded["input_ids"].squeeze(0),
         vision=SimpleNamespace(
-            images=encoded.get("pixel_values", None),
+            images=encoded["pixel_values"],
             mask=None,
         ),
     )

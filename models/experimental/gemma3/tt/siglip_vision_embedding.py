@@ -1,5 +1,5 @@
 """
-This is the VisionEmbedding implementation for the Gemma-3-4b-it
+This is the VisionEmbedding implementation for the Gemma3
 This implementation combines patch_conv followed by Embeddings as a submodule.
 """
 
@@ -9,10 +9,10 @@ This implementation combines patch_conv followed by Embeddings as a submodule.
 
 
 import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-from models.experimental.gemma3_4b.tt.gemma_conv2d_patch import TtGemmaConv2dPatch
+from models.experimental.gemma3.tt.gemma_conv2d_patch import TtGemmaConv2dPatch
 
 
 class TtSiglipVisionEmbeddings(LightweightModule):

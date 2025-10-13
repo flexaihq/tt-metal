@@ -1,7 +1,7 @@
 """
 source: models/tt_transformers/tt/lm_head.py
 
-This is the LMHead module for the Gemma-3-4B-it model.
+This is the LMHead module for the Gemma3 model.
 """
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
@@ -31,11 +31,12 @@ class LMHead(LightweightModule):
         super().__init__()
         self.args = args
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.dtype = dtype
         self.vocab_size = args.vocab_size
         self.padded_vocab_size = args.padded_vocab_size
         self.num_devices = args.num_devices
-        self.tt_ccl = tt_ccl
+
         size_per_device = self.vocab_size // self.num_devices
 
         if args.is_galaxy:
@@ -146,15 +147,15 @@ class LMHead(LightweightModule):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
             )
-            outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG))
+            outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.DRAM_MEMORY_CONFIG))
 
         # Concatenate the outputs
-        output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         output = tt_all_reduce(
             output,
-            mesh_device=self.mesh_device,
-            tt_ccl=self.tt_ccl,
+            self.mesh_device,
+            self.tt_ccl,
             cluster_axis=1,
             dim=3 if self.args.is_galaxy else 0,
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,

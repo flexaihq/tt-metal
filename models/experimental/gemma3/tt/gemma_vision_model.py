@@ -1,5 +1,5 @@
 """
-This is the Vision Tower Model for Gemma-3-4b-it.
+This is the Vision Tower Model for Gemma3.
 """
 
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
@@ -9,8 +9,8 @@ This is the Vision Tower Model for Gemma-3-4b-it.
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.gemma3_4b.tt.siglip_vision_embedding import TtSiglipVisionEmbeddings
-from models.experimental.gemma3_4b.tt.gemma_image_transformer import TtGemmaImageTransformer
+from models.experimental.gemma3.tt.siglip_vision_embedding import TtSiglipVisionEmbeddings
+from models.experimental.gemma3.tt.gemma_image_transformer import TtGemmaImageTransformer
 from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 
 
@@ -18,7 +18,6 @@ class TtSiglipGemmaVisionModel(LightweightModule):
     def __init__(
         self,
         mesh_device,
-        tt_ccl,
         state_dict,
         state_dict_prefix,
         dtype,
@@ -29,7 +28,6 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         super().__init__()
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.tt_ccl = tt_ccl
 
         self.image_size = configuration.image_size
         self.patch_size = configuration.vision_patch_size
@@ -42,8 +40,6 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         self.in_channels = configuration.vision_in_channels
         self.n_global_layers = configuration.vision_n_global_layers
         self.return_intermediate = return_intermediate
-
-        self.prepare_residual_tensor_prefill = configuration.prepare_residual_tensor_prefill
 
         self.embeddings = TtSiglipVisionEmbeddings(
             mesh_device=mesh_device,
@@ -60,7 +56,6 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         # transformer
         self.encoder = TtGemmaImageTransformer(
             mesh_device=mesh_device,
-            tt_ccl=self.tt_ccl,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}encoder.",
             weight_cache_path=configuration.weight_cache_path(dtype),
@@ -69,6 +64,8 @@ class TtSiglipGemmaVisionModel(LightweightModule):
             layers=self.layers,
             block_key="layers",
         )
+
+        self.prepare_residual_tensor_prefill = configuration.prepare_residual_tensor_prefill
 
         self.ln_post = TtLayerNorm(
             device=mesh_device,
@@ -88,24 +85,18 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         bsz, in_channel, h, w = images.shape
 
         x = self.embeddings(images)
-
-        x = ttnn.to_torch(x)
         attention_mask = torch.zeros(bsz, 1, x.shape[1], x.shape[1])
-        attention_input = self.prepare_residual_tensor_prefill(
-            x,
-            force_replicated=True,
-        )
 
         tt_mask = ttnn.from_torch(
             attention_mask,
             device=self.mesh_device,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         x = self.encoder(
-            attention_input,
+            x,
             mask=tt_mask,
         )
 

@@ -1,27 +1,27 @@
 """
 source: models/tt_transformers/tt/decoder.py
 
-This is the Decoder block for the gemma 3-4b-it model
+This is the Decoder block for the Gemma3 model
 We couldn't use the existing implementation in TT-Transformers because the usage of submodules is different
 
-In Gemma-3-4b-it, The decoder Block has Additional pre_feedforward_layernorm and post_feedforward_layernorm,
+In Gemma3, The decoder Block has Additional pre_feedforward_layernorm and post_feedforward_layernorm,
 And the logic of implementation is different from the existing implementation in TT-Transformers.
 """
 
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
-
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
+from models.experimental.gemma3.tt.rmsnorm import RMSNorm
 
-from models.experimental.gemma3_4b.tt.attention import Attention
+from models.experimental.gemma3.tt.attention import Attention as DefaultAttention
 
-from models.experimental.gemma3_4b.tt.mlp import MLP
+from models.experimental.gemma3.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
+from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
 class TransformerBlock(LightweightModule):
@@ -35,7 +35,6 @@ class TransformerBlock(LightweightModule):
         layer_num,
         weight_cache_path,
         transformation_mats,
-        transformation_mats_local=None,
         paged_attention_config=None,
         use_paged_kv_cache=False,
         attention_class=None,
@@ -44,8 +43,8 @@ class TransformerBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.tt_ccl = tt_ccl
 
+        self.tt_ccl = tt_ccl
         self.args = args
         self.hidden_size = args.dim
         self.n_heads = args.n_heads
@@ -58,26 +57,25 @@ class TransformerBlock(LightweightModule):
         self.model_config = args.get_model_config()
 
         self.layer_num = layer_num
+        self.num_devices = args.num_devices
 
-        self.is_attention_sliding = (
-            self.args.layer_types[layer_num] == "sliding_attention" if self.args.layer_types else False
-        )
+        ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
 
-        self.attention = Attention(
+        self.attention = ActualAttentionClass(
             mesh_device=mesh_device,
-            tt_ccl=self.tt_ccl,
+            tt_ccl=tt_ccl,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
             dtype=dtype,
-            transformation_mats=transformation_mats_local if self.is_attention_sliding else transformation_mats,
+            transformation_mats=transformation_mats,
             configuration=args,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
         )
         self.feed_forward = MLP(
             mesh_device=mesh_device,
-            tt_ccl=self.tt_ccl,
+            tt_ccl=tt_ccl,
             args=args,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -86,7 +84,7 @@ class TransformerBlock(LightweightModule):
             model_config=self.model_config,
         )
 
-        self.attention_norm = DistributedNorm(  # input_layernorm
+        self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
@@ -188,18 +186,18 @@ class TransformerBlock(LightweightModule):
         kv_cache=None,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
-        # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
 
         assert (
             hidden_states.memory_config() == skip_mem_cfg
         ), f"decoder input memcfg mismatch: {hidden_states.memory_config()} != {skip_mem_cfg}"
-
-        # Choose the correct rotation matrices based on the mode
-        rot_mats = rot_mats_local if self.is_attention_sliding else rot_mats_global
         residual = hidden_states
 
         attn_in = self.attention_norm(hidden_states, mode)
+
+        rot_mats = (
+            rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
+        )
 
         attn_out = self.attention.forward(
             attn_in,
@@ -218,6 +216,22 @@ class TransformerBlock(LightweightModule):
         ttnn.deallocate(attn_out)
         ttnn.deallocate(attn_in)
 
+        if self.num_devices > 1:
+            hidden_states = tt_all_reduce(
+                hidden_states,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=3,
+                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+                num_all_gather_links=self.args.num_all_gather_links,
+                topology=ttnn.Topology.Ring,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=self.args.ccl_dtype,
+            )
+
+            hidden_states = ttnn.div(hidden_states, self.num_devices)
+
         hidden_states = ttnn.add(hidden_states, residual, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
 
         residual = hidden_states
@@ -234,6 +248,22 @@ class TransformerBlock(LightweightModule):
         )
 
         hidden_states = self.post_ff_norm(hidden_states, mode)
+
+        if self.num_devices > 1:
+            hidden_states = tt_all_reduce(
+                hidden_states,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=0,
+                dim=3,
+                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+                num_all_gather_links=self.args.num_all_gather_links,
+                topology=ttnn.Topology.Ring,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=self.args.ccl_dtype,
+            )
+
+            hidden_states = ttnn.div(hidden_states, self.num_devices)
 
         hidden_states = ttnn.add(
             hidden_states,

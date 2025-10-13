@@ -1,7 +1,7 @@
 """
 source: models/tt_transformers/tt/multimodal/llama_image_transformer.py
 
-This is the Entire ImageTransformer for Gemma-3-4b-it.
+This is the Entire ImageTransformer for Gemma3.
 We have adapted the TtGemmaImageTransformerBlock from TtLlamaImageTransformerBlock
 with changes incorporating the GemmaImageAttention and GemmaImageFeedForward
 """
@@ -12,14 +12,13 @@ with changes incorporating the GemmaImageAttention and GemmaImageFeedForward
 from tqdm import tqdm
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.gemma3_4b.tt.gemma_image_block import TtGemmaImageTransformerBlock
+from models.experimental.gemma3.tt.gemma_image_block import TtGemmaImageTransformerBlock
 
 
 class TtGemmaImageTransformer(LightweightModule):
     def __init__(
         self,
         mesh_device,
-        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -33,13 +32,11 @@ class TtGemmaImageTransformer(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
-        self.tt_ccl = tt_ccl
         self.gated = gated
 
         self.resblocks = [
             TtGemmaImageTransformerBlock(
                 mesh_device=mesh_device,
-                tt_ccl=self.tt_ccl,
                 state_dict=state_dict,
                 state_dict_prefix=f"{state_dict_prefix}{block_key}.{i}.",
                 weight_cache_path=weight_cache_path,

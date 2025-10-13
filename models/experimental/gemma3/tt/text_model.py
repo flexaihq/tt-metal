@@ -1,6 +1,6 @@
 """
 
-This is the end-to-end implementation of the Gemma-3-4b-it model.
+This is the end-to-end implementation of the Gemma3 model.
 
 """
 
@@ -9,20 +9,21 @@ This is the end-to-end implementation of the Gemma-3-4b-it model.
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
+from models.experimental.gemma3.tt.rmsnorm import RMSNorm
 
-# from models.tt_transformers.tt.model import Transformer
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.embedding import Embedding
+from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.rope import RotarySetup
 
-from models.experimental.gemma3_4b.tt.decoder import TransformerBlock
+from models.experimental.gemma3.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from tqdm import tqdm
 import torch
-from models.experimental.gemma3_4b.tt.lm_head import LMHead
+from models.experimental.gemma3.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.common import copy_host_to_device
+from models.utility_functions import nearest_32
+from models.tt_transformers.tt.ccl import TT_CCL
 
 
 class Gemma3Transformer(LightweightModule):
@@ -31,55 +32,63 @@ class Gemma3Transformer(LightweightModule):
         args,
         dtype,
         mesh_device,
-        tt_ccl,
         state_dict,
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        attention_class=None,
+        rope_setup_class=None,
+        attn_mask=None,
     ):
         super().__init__()
         self.args = args
+        self.paged_attention_config = paged_attention_config
         self.vocab_size = args.vocab_size
+        self.tt_ccl = TT_CCL(mesh_device)
         assert self.vocab_size > 0
         self.n_layers = args.n_layers
         self.mesh_device = mesh_device
-        self.tt_ccl = tt_ccl
         self.dtype = dtype
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
+        self.tt_ccl = TT_CCL(self.mesh_device)
 
-        self.embd = Embedding(
-            mesh_device=mesh_device,
-            args=args,
-            weight_cache_path=args.weight_cache_path(dtype),
-            state_dict=state_dict,
-            dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
-        )
+        embd_kwargs = {
+            "mesh_device": mesh_device,
+            "args": args,
+            "weight_cache_path": args.weight_cache_path(dtype),
+            "state_dict": state_dict,
+            "dtype": ttnn.bfloat16,  # Row major layout requires bfloat16
+        }
+        if self.args.embed_scale is not None:
+            embd_cls = ScaledEmbedding
+            embd_kwargs["embed_scale"] = self.args.embed_scale
+        else:
+            embd_cls = Embedding
+        self.embd = embd_cls(**embd_kwargs)
 
-        self.rope_setup = RotarySetup(
-            mesh_device,
-            args.max_batch_size,
-            args.head_dim,
-            args.max_seq_len,
-            args.rope_theta,
-            args.rope_scaling,
+        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
+        self.rope_setup = ActualRopeSetupClass(
+            device=mesh_device,
+            batch_size=args.max_batch_size,
+            head_dim=args.head_dim,
+            max_seq_len=args.max_seq_len,
+            rope_theta=args.rope_theta,
+            rope_scaling=args.rope_scaling,
         )
 
         if args.rope_theta_local:
-            self.rope_setup_local = RotarySetup(
+            self.rope_local_setup = RotarySetup(
                 mesh_device,
                 args.max_batch_size,
                 args.head_dim,
                 args.max_seq_len,
                 args.rope_theta_local,
-                None,
+                rope_scaling=None,
             )
-        else:
-            self.rope_setup_local = None
 
-        trans_mats_dict = self.rope_setup.get_both_trans_mats()
-        trans_mats_dict_local = self.rope_setup_local.get_both_trans_mats()
+        self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
         self.layers = [
             TransformerBlock(
@@ -90,14 +99,13 @@ class Gemma3Transformer(LightweightModule):
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
                 layer_num=i,
-                transformation_mats=trans_mats_dict,
-                transformation_mats_local=trans_mats_dict_local,
+                transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
+                attention_class=attention_class,
             )
             for i in tqdm(range(self.n_layers))
         ]
-        self.cross_attention_layers = self.layers
         self.norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -131,7 +139,30 @@ class Gemma3Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
-        self.embed_scale = args.dim**0.5
+        self.host_embed = self.args.reference_embedding()
+
+    def setup_cache(self, max_batch_size):
+        self.cache_is_setup = True
+
+        # Prepare xattn_caches
+        chunk_length = nearest_32(self.args.vision_chunk_ntok)
+        vision_seq_len = self.args.vision_max_num_chunks * chunk_length
+        xattn_cache = [
+            [
+                ttnn.from_torch(
+                    torch.zeros(max_batch_size, self.args.n_kv_heads, vision_seq_len, self.args.head_dim),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+                )
+                for _ in range(2)
+            ]
+            for l in range(len(self.cross_attention_layers))
+        ]
+
+        return xattn_cache
 
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
         """
@@ -139,21 +170,67 @@ class Gemma3Transformer(LightweightModule):
         tensors on device.
         TODO: Debate whether this function is responsible for padding
         """
+        if not kwargs.get("processed_inputs", None):
+            tokens = tokens.reshape(1, 1, 1, -1)
+            S = tokens.shape[-1]
+            tokens = ttnn.from_torch(
+                tokens,
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            tokens_embd = self.embd(tokens)
+        else:
+            S = tokens.shape[-1]
 
-        assert tokens.dim() == 2, "tokens must be a 2D tensor"
-        tokens = tokens.reshape(1, 1, 1, -1)
-        S = tokens.shape[-1]
-        tokens = ttnn.from_torch(
-            tokens,
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        tokens_embd = self.embd(tokens)
-        tokens_embd = ttnn.multiply(tokens_embd, self.embed_scale)
+            tokens_embd = ttnn.from_torch(
+                tokens.reshape(1, 1, 1, -1),
+                device=self.mesh_device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+            tokens_embd = self.embd(tokens_embd)
+
+            pixel_values = kwargs["processed_inputs"]["pixel_values"]
+            input_ids = kwargs["processed_inputs"]["input_ids"]
+            if pixel_values is not None:
+                vision_model = kwargs["vision_model"]
+                vision_output = vision_model(pixel_values)
+
+                tokens_embd = ttnn.to_torch(
+                    tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+                )
+
+                comp_vision_output = ttnn.to_torch(
+                    vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+                )[:, :, :, : vision_output.shape[-1]]
+
+                comp_vision_output = torch.nn.functional.pad(
+                    comp_vision_output, (0, 0, 0, tokens_embd.shape[1] - comp_vision_output.shape[1]), "constant", 0
+                )
+                input_ids = torch.nn.functional.pad(
+                    input_ids, (0, tokens_embd.shape[1] - input_ids.shape[1]), "constant", 0
+                )
+                image_features = comp_vision_output.squeeze(0)
+                special_image_mask = (input_ids == self.args.image_token_index).unsqueeze(-1)
+                special_image_mask = special_image_mask.expand_as(tokens_embd)
+                image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
+                tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
+
+                tokens_embd = ttnn.from_torch(
+                    tokens_embd,
+                    dtype=ttnn.bfloat16,
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(None, -1), mesh_shape=list(self.mesh_device.shape)
+                    ),
+                )
+
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
-
         # Slice the rot mats to the prefill seqlen
         assert (
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
@@ -164,10 +241,10 @@ class Gemma3Transformer(LightweightModule):
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
 
-        if self.rope_setup_local is not None:
+        if hasattr(self, "rope_local_setup"):
             tt_rot_mats_prefill_local = [
-                self.rope_setup_local.cos_matrix[:, :, start_pos : start_pos + S, :],
-                self.rope_setup_local.sin_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
             ]
         else:
             tt_rot_mats_prefill_local = None
@@ -194,7 +271,13 @@ class Gemma3Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
+        return (
+            tokens_embd,
+            tt_rot_mats_prefill_global,
+            tt_rot_mats_prefill_local,
+            tt_page_table,
+            tt_chunk_page_table,
+        )
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -230,8 +313,8 @@ class Gemma3Transformer(LightweightModule):
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
         rope_idxs_global = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
-        if self.rope_setup_local is not None:
-            rope_idxs_local = self.rope_setup_local.get_rot_idxs(rot_current_pos, on_host=True)
+        if hasattr(self, "rope_local_setup"):
+            rope_idxs_local = self.rope_local_setup.get_rot_idxs(rot_current_pos, on_host=True)
         else:
             rope_idxs_local = None
 
@@ -257,6 +340,7 @@ class Gemma3Transformer(LightweightModule):
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
+
         return tokens, current_pos_tt, rope_idxs_global, rope_idxs_local, page_table
 
     def _transform_decode_inputs_device(self, tokens):
@@ -269,7 +353,6 @@ class Gemma3Transformer(LightweightModule):
         Embed tokens
         """
         tt_tokens = self.embd(tokens)
-        tt_tokens = ttnn.multiply(tt_tokens, self.embed_scale)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         tt_tokens = ttnn.to_memory_config(
             tt_tokens,
@@ -277,34 +360,33 @@ class Gemma3Transformer(LightweightModule):
         )
         return tt_tokens
 
-    def concat_device_output(self, tt_out):
-        """
-        Concatenate the output of the devices into a single tensor.
-        """
-        torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out.cpu())]
-        if self.args.is_galaxy:
-            row_dim, col_dim = (3, 1)
-        else:
-            row_dim, col_dim = (1, -1)
-
-        rows, cols = self.args.cluster_shape
-        mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
-        row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
-        return torch.cat(row_concatenated, dim=row_dim)
-
     def process_output_prefill(self, tt_out, last_token_idx):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
-        return self.concat_device_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
+        logits = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, dims=(3, 1) if self.args.is_galaxy else (1, -1), mesh_shape=self.args.cluster_shape
+            ),
+        )[0, 0, last_token_idx, : self.vocab_size]
+        return logits
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """
         Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         if is_tokens:
-            return self.concat_device_output(tt_out)[0, 0, :B, 0]
+            tt_out = ttnn.to_torch(
+                tt_out,  # tt_out.cpu(blocking=True, cq_id=1),
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device,
+                    dims=(3, 1) if self.args.is_galaxy else (1, -1),
+                    mesh_shape=self.args.cluster_shape,
+                ),
+            )[0, 0, :B, 0]
+            return tt_out
 
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
@@ -329,6 +411,18 @@ class Gemma3Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        if hasattr(self.args, "sliding_window") and self.args.sliding_window is not None:
+            mask = torch.triu(torch.full((1, 1, x.shape[-2], x.shape[-2]), -float("inf")), diagonal=1)
+            sliding_mask = mask + torch.tril(
+                torch.full((1, 1, x.shape[-2], x.shape[-2]), -float("inf")),
+                diagonal=-self.args.sliding_window,
+            )
+            sliding_attn_mask = ttnn.from_torch(
+                sliding_mask, device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            )
+        else:
+            sliding_attn_mask = None
+
         return self.forward(
             x,
             current_pos=None,
@@ -359,6 +453,24 @@ class Gemma3Transformer(LightweightModule):
         if rot_mat_idxs_local is not None:
             ttnn.plus_one(rot_mat_idxs_local)
 
+    def update_attention_masks(self, current_pos):
+        torch_mask = torch.concat(
+            [
+                self.decode_sliding_mask_mat[i, :, current_pos[i].item() : current_pos[i].item() + 1, :].unsqueeze(0)
+                for i in range(self.decode_sliding_mask_mat.shape[0])
+            ],
+            axis=0,
+        ).transpose(1, 2)
+        sliding_window_causal_mask = ttnn.as_tensor(
+            torch_mask,
+            dtype=ttnn.bfloat4_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        ttnn.copy_host_to_device_tensor(sliding_window_causal_mask, self.device_decode_sliding_mask)
+
     def ttnn_decode_forward(
         self,
         x,
@@ -374,11 +486,9 @@ class Gemma3Transformer(LightweightModule):
         It returns ttnn device tensors.
         """
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs_global)
-        if self.rope_setup_local is not None:
-            rot_mats_local = self.rope_setup_local.get_rot_mats(rot_mat_idxs_local)
-        else:
-            rot_mats_local = None
-
+        rot_mats_local = (
+            self.rope_local_setup.get_rot_mats(rot_mat_idxs_local) if rot_mat_idxs_local is not None else None
+        )
         x_embed = self._transform_decode_inputs_device(x)
 
         tt_logits = self.forward(
@@ -422,9 +532,7 @@ class Gemma3Transformer(LightweightModule):
             ttnn.copy(tt_logits.reshape(x.shape), x)
         elif not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
-            # TODO Investigate why moving to DRAM fails, it never should!
-            # tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
-            pass
+            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits
 

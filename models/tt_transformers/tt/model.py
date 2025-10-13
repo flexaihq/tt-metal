@@ -188,7 +188,13 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
+        return (
+            tokens_embd,
+            tt_rot_mats_prefill_global,
+            tt_rot_mats_prefill_local,
+            tt_page_table,
+            tt_chunk_page_table,
+        )
 
     def prepare_inputs_decode(self, *inputs):
         """
