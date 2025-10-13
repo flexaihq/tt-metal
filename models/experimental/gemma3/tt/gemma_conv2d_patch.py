@@ -4,7 +4,7 @@ This is the Conv2dPath of Gemma3
 We have reused the exisiting Conv2dPath of TtLlamaConv2dPath with few modifications.
 We have added a check for weight to convert 4D to 2D
 """
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 

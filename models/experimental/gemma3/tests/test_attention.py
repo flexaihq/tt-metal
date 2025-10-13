@@ -1,7 +1,7 @@
 """Gemma-3 Test for Text Attention"""
 
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -73,7 +73,7 @@ def test_attention_inference(
     pcc = 0.99
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
-    model_args.n_layers = 1  # For the unit test, just run a single layer
+    model_args.n_layers = 6  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
 

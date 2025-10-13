@@ -1453,7 +1453,8 @@ class ModelArgs:
         xs_1BSH = ttnn.from_torch(
             x_1BSH,
             device=self.mesh_device,
-            dtype=ttnn.bfloat8_b,
+            # dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
@@ -1631,6 +1632,8 @@ class ModelArgs:
         """
         Returns the number of tokens per chunk, accounting for the extra class token
         """
+        if self.is_llama_vision():
+            return (self.vision_chunk_size // self.vision_patch_size) ** 2 + 1
         return (self.image_size // self.vision_patch_size) ** 2 + 1
 
     def _set_model_params(self, checkpoint_dir):
@@ -2582,10 +2585,9 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            if hasattr(model.model, "rotary_emb_local") and model.model.rotary_emb_local is not None:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb, model.model.rotary_emb_local)
-            else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            rotary_emb_local = getattr(model.model, "rotary_emb_local", None)
+            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb, rotary_emb_local=rotary_emb_local)
+
             return wrapper
 
     def reference_attention(self):

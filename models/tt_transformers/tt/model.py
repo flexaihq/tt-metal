@@ -323,7 +323,6 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        **kwargs,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -368,7 +367,6 @@ class Transformer(LightweightModule):
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
-        **kwargs,
     ):
         """
         This method will take device tensors and any other args to run forward.
