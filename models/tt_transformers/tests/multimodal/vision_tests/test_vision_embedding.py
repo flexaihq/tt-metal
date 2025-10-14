@@ -1,7 +1,7 @@
 """Gemma3 Test for Vision Embedding"""
 
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,8 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.experimental.gemma3.tt.siglip_vision_embedding import TtSiglipVisionEmbeddings
+from models.tt_transformers.tt.multimodal.gemma3.gemma_vision_embedding import TtGemmaVisionEmbeddings
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from ttnn import ConcatMeshToTensor
 
@@ -57,7 +56,7 @@ def test_vision_embedding_integration(
     # reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor)
 
-    vision_embed = TtSiglipVisionEmbeddings(
+    vision_embed = TtGemmaVisionEmbeddings(
         mesh_device=mesh_device,
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,

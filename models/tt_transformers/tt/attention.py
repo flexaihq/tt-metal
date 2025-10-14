@@ -30,6 +30,8 @@ class Attention(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
+        self.layer_idx = layer_num
+        self.configuration = configuration
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
         self.TG = self.num_devices == 32
@@ -516,6 +518,7 @@ class Attention(LightweightModule):
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                sliding_window=self.configuration.sliding_window if self.is_sliding else 0,
             )
         else:
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
@@ -527,6 +530,7 @@ class Attention(LightweightModule):
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
                 compute_kernel_config=self.sdpa_decode_compute_kernel_cfg,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
+                sliding_window=self.configuration.sliding_window if self.is_sliding else 0,
             )
 
         ttnn.deallocate(q_heads_1BQD)
@@ -833,7 +837,6 @@ class Attention(LightweightModule):
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
-                is_causal=True,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
@@ -927,7 +930,13 @@ class Attention(LightweightModule):
                 kv_cache=kv_cache,
             )
         else:
-            return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
+            return self.forward_decode(
+                x,
+                current_pos,
+                rot_mats,
+                page_table=page_table,
+                kv_cache=kv_cache,
+            )
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
         tensor_copy = ttnn.clone(key_or_value_layer)

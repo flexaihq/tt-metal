@@ -1,23 +1,16 @@
 """Gemma3 test for Vision RMSNorm"""
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-
-# SPDX-License-Identifier: Apache-2.0
-
-from loguru import logger
-
-import torch
-import pytest
 import os
 
+import pytest
+import torch
+from loguru import logger
+
 import ttnn
-from models.experimental.gemma3.tt.gemma_vision_rmsnorm import RMSNorm
-
 from models.tt_transformers.tt.ccl import TT_CCL
-
-
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.multimodal.gemma3.gemma_vision_rmsnorm import RMSNorm
+from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @torch.no_grad()

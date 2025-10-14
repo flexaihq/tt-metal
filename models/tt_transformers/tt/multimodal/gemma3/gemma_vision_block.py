@@ -7,14 +7,15 @@ This is the Vision Tower Model for Gemma3.
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.gemma3.tt.siglip_vision_embedding import TtSiglipVisionEmbeddings
-from models.experimental.gemma3.tt.gemma_image_transformer import TtGemmaImageTransformer
+from models.tt_transformers.tt.multimodal.gemma3.gemma_image_transformer import TtGemmaImageTransformer
+from models.tt_transformers.tt.multimodal.gemma3.gemma_vision_embedding import TtGemmaVisionEmbeddings
 from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 
 
-class TtSiglipGemmaVisionModel(LightweightModule):
+class TtGemmaVisionModel(LightweightModule):
     def __init__(
         self,
         mesh_device,
@@ -41,7 +42,7 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         self.n_global_layers = configuration.vision_n_global_layers
         self.return_intermediate = return_intermediate
 
-        self.embeddings = TtSiglipVisionEmbeddings(
+        self.embeddings = TtGemmaVisionEmbeddings(
             mesh_device=mesh_device,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}embeddings.",

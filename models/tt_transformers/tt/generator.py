@@ -61,13 +61,7 @@ class Generator:
 
     # Note: This function is called by vLLM
     def prefill_forward_text(
-        self,
-        tokens: torch.Tensor,
-        page_table=None,
-        kv_cache=None,
-        prompt_lens=None,
-        empty_slots=None,
-        **kwargs,
+        self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, empty_slots=None, **kwargs
     ):
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
@@ -404,6 +398,13 @@ class Generator:
                     host_tensors=host_inputs_i,
                     device_tensors=self.trace_inputs_text[i],
                 )
+        for i in range(self.data_parallel):
+            if (
+                hasattr(self.model[i], "device_decode_sliding_mask")
+                and self.model[i].device_decode_sliding_mask is not None
+            ):
+                self.model[i].update_attention_masks(current_pos[i])
+
         for i in range(self.data_parallel):
             if (
                 hasattr(self.model[i], "device_decode_sliding_mask")

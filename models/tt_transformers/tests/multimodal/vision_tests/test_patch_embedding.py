@@ -1,20 +1,19 @@
 """Gemma3 test for Vision Patch Embedding"""
 
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 import os
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
-import torch
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.experimental.gemma3.tt.gemma_conv2d_patch import TtGemmaConv2dPatch
+from models.tt_transformers.tt.multimodal.gemma3.gemma_conv2d_patch import TtGemmaConv2dPatch
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from ttnn import ConcatMeshToTensor
 

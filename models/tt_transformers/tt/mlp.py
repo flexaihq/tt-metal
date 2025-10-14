@@ -29,6 +29,7 @@ class MLP(LightweightModule):
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.args = args
+        self.num_devices = args.num_devices
         self.dim = args.dim
         self.model_config = model_config
         self.layer_num = layer_num
@@ -252,6 +253,7 @@ class MLP(LightweightModule):
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
         ttnn.deallocate(w2_in)
+        w2_out = ttnn.multiply(w2_out, self.num_devices)
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
         w2_out_reduced = tt_all_reduce(
@@ -272,6 +274,7 @@ class MLP(LightweightModule):
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
         )
+        w2_out_reduced = ttnn.div(w2_out_reduced, self.num_devices)
 
         # Ensure dim 0 and 1 are 1
         original_shape = w2_out_reduced.shape

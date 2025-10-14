@@ -1,7 +1,7 @@
 """Gemma3 Test for Vision Model"""
 
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,8 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-
-from models.experimental.gemma3.tt.gemma_vision_model import TtSiglipGemmaVisionModel
+from models.tt_transformers.tt.multimodal.gemma3.gemma_vision_block import TtGemmaVisionModel
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -66,7 +65,7 @@ def test_gemma_vision(
     # reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor).last_hidden_state
 
-    test_gemma_vision = TtSiglipGemmaVisionModel(
+    test_gemma_vision = TtGemmaVisionModel(
         mesh_device,
         state_dict,
         state_dict_prefix=first_layer_prefix,

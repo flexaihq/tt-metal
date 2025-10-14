@@ -11,7 +11,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.gemma3.tt.gemma_vision_rmsnorm import RMSNorm
+from models.tt_transformers.tt.multimodal.gemma3.gemma_vision_rmsnorm import RMSNorm
 
 
 class TtGemma3MultiModalProjector(LightweightModule):

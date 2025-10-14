@@ -3,11 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 import re
 from enum import Enum
 from types import SimpleNamespace
-from typing import Callable, Optional
+from typing import Optional
 
 import torch
 from llama_models.llama3.api.datatypes import ImageMedia
@@ -371,6 +370,7 @@ def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, ori
     rot_mats = [cos_gathereds, sin_gathereds]
     return rot_mats
 
+
 def compute_linear_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
     """Linear scaling for rotary embeddings."""
     freqs /= scale_factor
@@ -713,11 +713,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
-        from models.experimental.gemma3.tt.text_model import Gemma3Transformer as Transformer
-    else:
-        from models.tt_transformers.tt.model import Transformer
-
+    from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(
@@ -785,7 +781,7 @@ def hf_multimodal_encode(messages, processor):
         **encoded,
         tokens=encoded["input_ids"].squeeze(0),
         vision=SimpleNamespace(
-            images=encoded["pixel_values"],
+            images=encoded.get("pixel_values", None),
             mask=None,
         ),
     )

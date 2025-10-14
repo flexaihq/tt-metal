@@ -145,6 +145,8 @@ def test_attention_inference(
         )
         * 2
     ) - 1
+    if "gemma" in os.environ.get("HF_MODEL"):
+        pt_attention_input = pt_attention_input.to(torch.bfloat16)
     tt_attention_input = pt_attention_input.clone()
     attention_input = model_args.prepare_residual_tensor_prefill(
         tt_attention_input,

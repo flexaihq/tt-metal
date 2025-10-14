@@ -1,7 +1,7 @@
 """Gemma3 Test for multi-modal-projector"""
 
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,8 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.experimental.gemma3.tt.mmp import TtGemma3MultiModalProjector
-
+from models.tt_transformers.tt.multimodal.gemma3.multi_modal_projector import TtGemma3MultiModalProjector
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
