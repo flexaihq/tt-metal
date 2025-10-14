@@ -51,7 +51,7 @@ class TtGemmaModel(Transformer):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         tokens_embd = self.embd(tokens)
-        vision_output = self.compute_vision_token(**kwargs)
+        vision_output = self.compute_vision_token(kwargs.get("pixel_values", None))
 
         if vision_output is not None:
             tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
