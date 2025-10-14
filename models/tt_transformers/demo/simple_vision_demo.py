@@ -14,6 +14,7 @@ from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
 
 from models.tt_transformers.tt.generator import create_submeshes
+from models.tt_transformers.tt.model_config import ModelArgs
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
@@ -62,12 +63,11 @@ def create_multimodal_model(
     use_paged_kv_cache=False,
     checkpoint=None,
 ):
-    from models.tt_transformers.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.gemma3.gemma_e2e_model import TtGemmaModel
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
-    assert tt_model_args.is_llama_vision(), "This model is multimodal"
+    assert tt_model_args.is_multimodal, "This model is multimodal"
 
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
@@ -194,17 +194,19 @@ def test_multimodal_demo_text(
     Simple multimodal demo with limited dependence on reference code.
     """
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
+    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
 
-    if num_devices == 2:
-        if max_batch_size == 1:
-            pytest.skip(
-                "Batch size=1 on N300 mesh experiences ND hangs: https://github.com/tenstorrent/tt-metal/issues/28247"
-            )
-        if max_batch_size not in (4, 16):
-            pytest.skip(f"Batch size={max_batch_size} is not tested for N300 mesh")
+    # llama model only support on T3K right now and will skip if ran on N300 and N150
+    if tt_model_args.is_llama_vision() is True:
+        if num_devices == 2:
+            if max_batch_size == 1:
+                pytest.skip(
+                    "Batch size=1 on N300 mesh experiences ND hangs: https://github.com/tenstorrent/tt-metal/issues/28247"
+                )
+            if max_batch_size not in (4, 16):
+                pytest.skip(f"Batch size={max_batch_size} is not tested for N300 mesh")
     if num_devices == 8 and max_batch_size not in (1, 4, 32):
         pytest.skip(f"Batch size={max_batch_size} is not tested for T3K mesh")
-
     logger.info("Start profiler")
     profiler = BenchmarkProfiler()
     profiler.start("run")
