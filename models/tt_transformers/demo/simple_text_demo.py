@@ -1048,7 +1048,17 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
+    supported_models = [
+        "Llama-3.2-1B",
+        "Llama-3.2-3B",
+        "Llama-3.1-8B",
+        "Llama-3.2-11B",
+        "Llama-3.1-70B",
+        "Mistral-7B",
+        "gemma-3-1b",
+        "gemma-3-4b",
+        "gemma-3-27b",
+    ]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "P150x8", "T3K", "TG"]
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
@@ -1097,6 +1107,13 @@ def test_demo_text(
             "N300_Mistral-7B": 38,  # TODO Update target
             "T3K_Mistral-7B": 45,  # TODO Update target
             "TG_Mistral-7B": 45,  # TODO Update target
+            #
+            "N150_gemma-3-1b": 20,  # TODO Update target
+            #
+            "N150_gemma-3-4b": 11,  # TODO Update target
+            "N300_gemma-3-4b": 12,  # TODO Update target
+            #
+            "T3K_gemma-3-27b": 10,  # TODO Update target
         }
         if model_device_key in dict_target_decode_tok_s_u:
             target_decode_tok_s_u = dict_target_decode_tok_s_u[model_device_key]
@@ -1189,13 +1206,18 @@ def test_demo_text(
                 "N150_Llama-3.2-3B": 62,
                 "N150_Llama-3.1-8B": 120,
                 "N150_Mistral-7B": 106,
+                "N150_Qwen2.5-7B": 60,
+                "N150_gemma-3-1b": 62,  # TODO Update target
+                "N150_gemma-3-4b": 65,  # TODO Update target
                 # N300 targets
                 "N300_Qwen2.5-7B": 90,
+                "N300_gemma-3-4b": 125,  # TODO Update target
                 # T3K targets
                 "T3K_Llama-3.1-70B": 204,
                 "T3K_Qwen2.5-Coder-32B": 173,  # `f10cs08`
                 "T3K_Qwen2.5-72B": 240,
                 "T3K_Qwen3-32B": 166.5,
+                "T3K_gemma-3-27b": 330,  # TODO Update target
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -1203,13 +1225,17 @@ def test_demo_text(
                 "N150_Llama-3.2-3B": 35,
                 "N150_Llama-3.1-8B": 21,
                 "N150_Mistral-7B": 23,
+                "N150_gemma-3-1b": 20,  # TODO Update target
+                "N150_gemma-3-4b": 11,  # TODO Update target
                 # N300 targets
                 "N300_Qwen2.5-7B": 22.8,
+                "N300_gemma-3-4b": 35,  # TODO Update target
                 # T3K targets
                 "T3K_Llama-3.1-70B": 15,
                 "T3K_Qwen2.5-72B": 13.25,
                 "T3K_Qwen2.5-Coder-32B": 21,
                 "T3K_Qwen3-32B": 21,
+                "T3K_gemma-3-27b": 15,  # TODO Update target
             }
 
             # Only call verify_perf if the model_device_key exists in the targets

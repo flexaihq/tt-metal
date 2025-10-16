@@ -25,6 +25,18 @@ run_qwen7b_func() {
 
 }
 
+run_gemma3_4b_func() {
+
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-4b-it MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
+}
+
+run_gemma3_1b_func() {
+
+   HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma-3-1b-it MESH_DEVICE=N150 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
+
+}
+
+
 run_qwen25_vl_func() {
   fail=0
 

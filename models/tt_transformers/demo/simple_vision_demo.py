@@ -499,12 +499,18 @@ def test_multimodal_demo_text(
 
         run_config = (tt_device_name, base_model_name, max_batch_size)
         targets_prefill_tok_s = {
+            ("N150", "gemma-3-4b", 1): 265,
             ("N300", "Llama-3.2-11B", 16): 22.4,
+            ("N300", "gemma-3-4b", 1): 350,
             ("T3K", "Llama-3.2-90B", 1): 15.3,
+            ("T3K", "gemma-3-27b", 1): 250,
         }
         targets_decode_tok_s_u = {
+            ("N150", "gemma-3-4b", 1): 20,
             ("N300", "Llama-3.2-11B", 16): 17,
+            ("N300", "gemma-3-4b", 1): 20,
             ("T3K", "Llama-3.2-90B", 1): 4.3,
+            ("T3K", "gemma-3-27b", 1): 12,
         }
 
         perf_targets = {}
