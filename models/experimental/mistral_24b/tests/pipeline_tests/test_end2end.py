@@ -22,8 +22,6 @@ from models.experimental.mistral_24b.tt.model import MistralTransformer as Trans
 from models.tt_transformers.tt.generator import Generator
 
 from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
-
 from models.tt_transformers.tt.model_config import ModelArgs
 from transformers import AutoProcessor, AutoModelForVision2Seq
 
@@ -388,8 +386,6 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 
 
 @torch.no_grad()
-@skip_for_grayskull("Requires wormhole_b0 to run")
-@skip_for_blackhole("Failing on DRAM harvested P100a, see #21419")
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(

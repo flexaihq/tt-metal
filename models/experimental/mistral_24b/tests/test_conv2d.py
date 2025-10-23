@@ -13,11 +13,10 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.vision_conv2d import TtMistralConv2dPatch
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -93,7 +92,7 @@ def test_conv2d_inference(
     tt_output_torch = tt_output_torch.unsqueeze(0)
     # 1 1024 4096
     # 2. Permute to match Conv2D output: (N, C_out, H_out, W_out)
-    tt_output_torch = tt_output_torch.permute(0, 2, 1).reshape(1, 1024, 64, 64)
+    tt_output_torch = tt_output_torch.permute(0, 2, 1).reshape(1, 1024, 110, 110)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 

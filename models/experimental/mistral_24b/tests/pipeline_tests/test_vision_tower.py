@@ -14,10 +14,9 @@ import ttnn
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.pipeline.mistral_vision_tower import MistralVisionTower
-from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
+from models.common.utility_functions import comp_allclose, comp_pcc
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -46,7 +45,7 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
 
     B, C, H, W = 1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size
     input_tensor = torch.rand((B, C, H, W), dtype=torch.bfloat16)
-
+    print("state_dict ", state_dict.keys())
     ##### Reference model output (Torch) #####
     reference_model = model_args.reference_vision_model()
     reference_model.load_state_dict(partial_state_dict)

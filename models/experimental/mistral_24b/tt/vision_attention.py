@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.utility_functions import is_blackhole, nearest_32
+from models.common.utility_functions import is_blackhole, nearest_32
 
 
 def rotate_half(x):

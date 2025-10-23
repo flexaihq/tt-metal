@@ -31,6 +31,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta_mllama,
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
+    convert_vision_meta_to_hf,
     load_hf_state_dict,
     load_meta_state_dict,
     reverse_permute,
@@ -1471,7 +1472,6 @@ class ModelArgs:
         else:
             return ""
 
-
     def _get_vision_prefix(self):
         return "visual."
 
@@ -1627,7 +1627,6 @@ class ModelArgs:
         self.state_dict_text_prefix = self._get_text_prefix()
         self.state_dict_vision_prefix = self._get_vision_prefix()
 
-
     @property
     def use_scaled_rope(self):
         return self.rope_scaling is not None
@@ -1702,7 +1701,7 @@ class ModelArgs:
         )
 
     def _set_vision_params(self, vision_config):
-        vision_config = config.get("vision_config", config)
+        vision_config = vision_config.get("vision_config", vision_config)
 
         self.vision_chunk_size = vision_config.get("vision_chunk_size", vision_config.get("image_size", -1))
         self.image_size = vision_config.get("image_size", -1)
@@ -1725,7 +1724,9 @@ class ModelArgs:
         self.vision_in_channels = vision_config.get("num_channels", 3)
 
         self.vision_dropout = vision_config.get("attention_dropout", 0.0)
-        self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", config.get("mm_tokens_per_image", 256))
+        self.mm_tokens_per_image = vision_config.get(
+            "mm_tokens_per_image", vision_config.get("mm_tokens_per_image", 256)
+        )
 
         if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
             self.vision_head_dim = vision_config.get("head_dim", 64)
@@ -1748,7 +1749,17 @@ class ModelArgs:
             # Merge non-nested keys into text_config
             text_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
             return text_config
+
         def merge_vision_config(base_config):
+            vision_config = base_config.get("vision_config", {})
+            # Merge non-nested keys into vision_config
+            vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return vision_config
+
+        if self.from_hf_url:
+            from transformers import AutoConfig
+
+            if self.dummy_weights:
                 logger.info(
                     f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
                 )
@@ -1763,18 +1774,18 @@ class ModelArgs:
                 )
 
             config = self.hf_config.to_dict()
-            if "text_config" in config or "vision_config" in config:
-                merged_text_config = merge_text_config(config)
-                self._set_params_from_dict(merged_text_config, is_hf=True)
+            # if "text_config" in config or "vision_config" in config:
+            #     merged_text_config = merge_text_config(config)
+            #     self._set_params_from_dict(merged_text_config, is_hf=True)
 
-                if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                    self._set_vision_params(config["vision_config"])
-                else:
-                    if "vision_config" in config:
-                        merged_vision_config = merge_vision_config(config)
-                        self._set_vision_params(merged_vision_config)
-            else:
-                self._set_params_from_dict(config, is_hf=True)
+            #     if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            #         self._set_vision_params(config["vision_config"])
+            #     else:
+            #         if "vision_config" in config:
+            #             merged_vision_config = merge_vision_config(config)
+            #             self._set_vision_params(merged_vision_config)
+            # else:
+            self._set_params_from_dict(config, is_hf=True)
 
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
@@ -1845,7 +1856,7 @@ class ModelArgs:
         return ("llama" in self.CKPT_DIR.lower()) and ("vision" in self.CKPT_DIR.lower())
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        if self.is_vision() and self.model_name.startswith("Mistral") and "Small-3.1-24B" not in self.model_name:
+        if self.is_multimodal and self.model_name.startswith("Mistral") and "Small-3.1-24B" not in self.model_name:
             text_prefix = self.state_dict_text_prefix
         else:
             text_prefix = "" if not is_vision else self.state_dict_text_prefix
@@ -1932,6 +1943,11 @@ class ModelArgs:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
                 model_cls = self.get_hf_model_cls()
+
+                if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+                    from transformers import Mistral3ForConditionalGeneration as AutoModelForCausalLM
+
+                    model_cls = AutoModelForCausalLM
                 model = model_cls.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto",
@@ -1952,8 +1968,24 @@ class ModelArgs:
             if self.is_multimodal:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
                 if self.is_llama_vision():
+                    state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
                 else:
                     state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+            else:
+                self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
+                self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
+                state_dict = standardize_hf_keys(state_dict)
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+
+        keys_dict = list(state_dict.keys())[:]
+        remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
+        for k in keys_dict:
+            if any([r in k for r in remv]):
+                state_dict.pop(k)
+        if getattr(self, "is_mixture_of_experts", False):
+            self.initialize_mixture_of_experts_configs()
+            self.moe = True
+            self.num_experts = max([int(item[-11]) + 1 for item in keys_dict if "block_sparse_moe.experts" in item])
         return state_dict
 
     def initialize_mixture_of_experts_configs(self):
@@ -2459,7 +2491,9 @@ class ModelArgs:
                             )
                             logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                         except Exception as fallback_e:
-                            logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
+                            logger.error(
+                                f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}"
+                            )
                             raise fallback_e
                     else:
                         logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
@@ -2527,7 +2561,6 @@ class ModelArgs:
             from transformers import AutoConfig
 
             model_cls = self.get_hf_model_cls()
-
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
@@ -2611,19 +2644,24 @@ class ModelArgs:
             from transformers import AutoConfig
 
             model_cls = self.get_hf_model_cls()
-            if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-                config.num_layers = self.n_layers
-                    model = model
-                elif "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                    from transformers import Mistral3ForConditionalGeneration
 
-                    model = Mistral3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, torch_dtype=torch.bfloat16)
-                    model = model
+            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+                from transformers import Mistral3ForConditionalGeneration as AutoModelForCausalLM
 
+                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, torch_dtype=torch.bfloat16)
+            else:
+                if self.dummy_weights and not load_checkpoint:
+                    config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                    config.num_layers = self.n_layers
+                    config.num_hidden_layers = self.n_layers
+                    model = model_cls.from_config(config)
                 else:
-                    model = self.cached_hf_model
-                model.model.layers = model.model.layers[: self.n_layers]
+                    if self.cached_hf_model is None:
+                        model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
+                        self.cached_hf_model = model
+                    else:
+                        model = self.cached_hf_model
+                    model.model.layers = model.model.layers[: self.n_layers]
 
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
@@ -2672,6 +2710,13 @@ class ModelArgs:
         layer._load_state_dict = layer.load_state_dict
         layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
         return layer
+        model = self.reference_vision_transformer(wrap=False)
+        layer = model.vision_tower.patch_conv
+        layer._load_state_dict = layer.load_state_dict
+        layer.load_state_dict = lambda x: layer._load_state_dict(convert_vision_meta_to_hf(x, self.head_dim))
+        return layer
+
+    def reference_conv2d_patch(self):
         model = self.reference_vision_transformer(wrap=False)
         layer = model.vision_tower.patch_conv
         layer._load_state_dict = layer.load_state_dict
